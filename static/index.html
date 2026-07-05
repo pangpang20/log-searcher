@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日志搜索系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; min-height: 100vh; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        h1 { text-align: center; color: #333; margin-bottom: 30px; }
+        .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-primary:hover { background: #0056b3; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover { background: #c82333; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover { background: #218838; }
+        .btn-info { background: #17a2b8; color: white; }
+        .btn-info:hover { background: #138496; }
+        .btn-warning { background: #ffc107; color: #212529; }
+        .btn-warning:hover { background: #d39e00; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn-secondary:hover { background: #545b62; }
+        .btn-sm { padding: 4px 8px; font-size: 12px; }
+        .system-card { background: white; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .system-header { padding: 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; }
+        .system-name { font-size: 18px; font-weight: 600; color: #333; }
+        .system-actions { display: flex; gap: 8px; }
+        .server-list { padding: 15px; display: none; }
+        .server-list.active { display: block; }
+        .server-item { padding: 10px; background: #f8f9fa; border-radius: 4px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .server-info { font-size: 14px; color: #666; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; }
+        .modal.active { display: flex; justify-content: center; align-items: center; }
+        .modal-content { background: white; border-radius: 8px; padding: 20px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .modal-title { font-size: 18px; font-weight: 600; }
+        .modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: #666; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; color: #333; }
+        .form-group input, .form-group select { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        .form-group input:focus, .form-group select:focus { outline: none; border-color: #007bff; }
+        .no-result { padding: 20px; text-align: center; color: #999; }
+        .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 24px; border-radius: 6px; color: white; font-size: 14px; z-index: 9999; opacity: 0; transition: opacity 0.3s; }
+        .toast.show { opacity: 1; }
+        .toast.success { background: #28a745; }
+        .toast.error { background: #dc3545; }
+        .btn-test { padding: 2px 8px; font-size: 12px; background: #17a2b8; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        .btn-test:hover { background: #138496; }
+        .server-actions { display: flex; gap: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>日志搜索系统</h1>
+        <div class="toolbar">
+            <div></div>
+            <button class="btn btn-primary" onclick="showAddSystemModal()">添加系统</button>
+        </div>
+        <div id="systemList"></div>
+    </div>
+
+    <div id="addSystemModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title">添加系统</span>
+                <button class="modal-close" onclick="closeModal('addSystemModal')">&times;</button>
+            </div>
+            <div class="form-group">
+                <label>系统名称</label>
+                <input type="text" id="systemName" placeholder="请输入系统名称">
+            </div>
+            <div style="text-align: right;">
+                <button class="btn btn-primary" onclick="addSystem()">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="addServerModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title">添加服务器</span>
+                <button class="modal-close" onclick="closeModal('addServerModal')">&times;</button>
+            </div>
+            <input type="hidden" id="serverSystemName">
+            <div class="form-group">
+                <label>IP地址</label>
+                <input type="text" id="serverIP" placeholder="请输入IP地址">
+            </div>
+            <div class="form-group">
+                <label>端口</label>
+                <input type="number" id="serverPort" value="22" placeholder="请输入端口">
+            </div>
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="serverUsername" placeholder="请输入用户名">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="serverPassword" placeholder="请输入密码">
+            </div>
+            <div class="form-group">
+                <label>日志目录</label>
+                <input type="text" id="serverDirectory" placeholder="请输入日志目录路径">
+            </div>
+            <div class="form-group">
+                <label>文件名匹配</label>
+                <input type="text" id="serverFilenamePattern" placeholder="留空匹配所有文件，多个用逗号分隔，如: app,error,sys">
+            </div>
+            <div style="text-align: right;">
+                <button class="btn btn-primary" onclick="addServer()">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="editServerModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title">编辑服务器</span>
+                <button class="modal-close" onclick="closeModal('editServerModal')">&times;</button>
+            </div>
+            <input type="hidden" id="editSystemName">
+            <input type="hidden" id="editServerIndex">
+            <div class="form-group">
+                <label>IP地址</label>
+                <input type="text" id="editIP" placeholder="请输入IP地址">
+            </div>
+            <div class="form-group">
+                <label>端口</label>
+                <input type="number" id="editPort" value="22" placeholder="请输入端口">
+            </div>
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="editUsername" placeholder="请输入用户名">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="editPassword" placeholder="请输入密码">
+            </div>
+            <div class="form-group">
+                <label>日志目录</label>
+                <input type="text" id="editDirectory" placeholder="请输入日志目录路径">
+            </div>
+            <div class="form-group">
+                <label>文件名匹配</label>
+                <input type="text" id="editFilenamePattern" placeholder="留空匹配所有文件，多个用逗号分隔">
+            </div>
+            <div style="text-align: right;">
+                <button class="btn btn-primary" onclick="updateServer()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="batchPatternModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title">批量修改文件匹配</span>
+                <button class="modal-close" onclick="closeModal('batchPatternModal')">&times;</button>
+            </div>
+            <input type="hidden" id="batchSystemName">
+            <div class="form-group">
+                <label>文件名匹配</label>
+                <input type="text" id="batchFilenamePattern" placeholder="留空则清空所有服务器的匹配，多个用逗号分隔">
+            </div>
+            <div style="color: #666; font-size: 13px; margin-bottom: 15px;">
+                提示：设置后将覆盖该系统下所有服务器的文件匹配规则
+            </div>
+            <div style="text-align: right;">
+                <button class="btn btn-primary" onclick="batchUpdatePattern()">确认修改</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSystems = [];
+
+
+        document.addEventListener('DOMContentLoaded', loadSystems);
+
+        async function loadSystems() {
+            const res = await fetch('/api/systems');
+            currentSystems = await res.json();
+            renderSystems();
+        }
+
+        function renderSystems() {
+            const container = document.getElementById('systemList');
+            if (currentSystems.length === 0) {
+                container.innerHTML = '<div class="no-result">暂无系统，请添加</div>';
+                return;
+            }
+            container.innerHTML = currentSystems.map((sys, idx) => `
+                <div class="system-card">
+                    <div class="system-header">
+                        <span class="system-name" onclick="toggleServers(${idx})" style="cursor: pointer;">${sys.name} (${sys.servers.length}台服务器)</span>
+                        <div class="system-actions">
+                            <button class="btn btn-success btn-sm" onclick="showSearchModal('${sys.name}')">搜索日志</button>
+                            <button class="btn btn-primary btn-sm" onclick="showAddServerModal('${sys.name}')">添加服务器</button>
+                            <button class="btn btn-secondary btn-sm" onclick="showBatchPatternModal('${sys.name}')">批量修改文件匹配</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteSystem('${sys.name}')">删除系统</button>
+                        </div>
+                    </div>
+                    <div class="server-list" id="servers-${idx}">
+                        ${sys.servers.length === 0 ? '<div class="no-result">暂无服务器</div>' : sys.servers.map((srv, i) => `
+                            <div class="server-item">
+                                <div class="server-info">
+                                    <strong>${srv.ip}:${srv.port}</strong> | 用户: ${srv.username} | 目录: ${srv.directory}${srv.filename_pattern ? ' | 文件: ' + srv.filename_pattern : ''}
+                                </div>
+                                <div class="server-actions">
+                                    <button class="btn-test" onclick="testServer('${sys.name}', ${i}, this)">测试连接</button>
+                                    <button class="btn btn-info btn-sm" onclick="copyServer('${sys.name}', ${i})">复制</button>
+                                    <button class="btn btn-warning btn-sm" onclick="showEditServerModal('${sys.name}', ${i})">编辑</button>
+                                    <button class="btn btn-danger btn-sm" onclick="deleteServer('${sys.name}', ${i})">删除</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function toggleServers(idx) {
+            const el = document.getElementById(`servers-${idx}`);
+            el.classList.toggle('active');
+        }
+
+        function showAddSystemModal() {
+            document.getElementById('systemName').value = '';
+            openModal('addSystemModal');
+        }
+
+        function showAddServerModal(systemName) {
+            document.getElementById('serverSystemName').value = systemName;
+            document.getElementById('serverIP').value = '';
+            document.getElementById('serverPort').value = '22';
+            document.getElementById('serverUsername').value = '';
+            document.getElementById('serverPassword').value = '';
+            document.getElementById('serverDirectory').value = '';
+            openModal('addServerModal');
+        }
+
+        function showSearchModal(systemName) {
+            window.open(`/search.html?system=${encodeURIComponent(systemName)}`, '_blank');
+        }
+
+        function openModal(id) {
+            document.getElementById(id).classList.add('active');
+        }
+
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('active');
+        }
+
+        async function addSystem() {
+            const name = document.getElementById('systemName').value.trim();
+            if (!name) { alert('请输入系统名称'); return; }
+            const res = await fetch('/api/systems', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                closeModal('addSystemModal');
+                loadSystems();
+            } else {
+                alert(data.error);
+            }
+        }
+
+        async function deleteSystem(name) {
+            if (!confirm(`确定删除系统"${name}"吗？`)) return;
+            await fetch(`/api/systems/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            loadSystems();
+        }
+
+        async function addServer() {
+            const systemName = document.getElementById('serverSystemName').value;
+            const server = {
+                ip: document.getElementById('serverIP').value.trim(),
+                port: document.getElementById('serverPort').value,
+                username: document.getElementById('serverUsername').value.trim(),
+                password: document.getElementById('serverPassword').value,
+                directory: document.getElementById('serverDirectory').value.trim(),
+                filename_pattern: document.getElementById('serverFilenamePattern').value.trim()
+            };
+            if (!server.ip || !server.username || !server.directory) {
+                alert('IP、用户名和目录不能为空');
+                return;
+            }
+            const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/servers`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(server)
+            });
+            const data = await res.json();
+            if (res.ok) {
+                closeModal('addServerModal');
+                loadSystems();
+            } else {
+                alert(data.error);
+            }
+        }
+
+        async function deleteServer(systemName, index) {
+            if (!confirm('确定删除该服务器吗？')) return;
+            await fetch(`/api/systems/${encodeURIComponent(systemName)}/servers/${index}`, { method: 'DELETE' });
+            loadSystems();
+        }
+
+        async function copyServer(systemName, index) {
+            const system = currentSystems.find(s => s.name === systemName);
+            if (!system || index >= system.servers.length) return;
+            const srv = system.servers[index];
+            const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/servers`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ip: srv.ip,
+                    port: srv.port,
+                    username: srv.username,
+                    password: srv.password,
+                    directory: srv.directory,
+                    filename_pattern: srv.filename_pattern || ''
+                })
+            });
+            if (res.ok) {
+                showToast('复制成功', 'success');
+                loadSystems();
+            } else {
+                const data = await res.json();
+                showToast(`复制失败: ${data.message}`, 'error');
+            }
+        }
+
+        function showEditServerModal(systemName, index) {
+            const system = currentSystems.find(s => s.name === systemName);
+            if (!system || index >= system.servers.length) return;
+            const srv = system.servers[index];
+            document.getElementById('editSystemName').value = systemName;
+            document.getElementById('editServerIndex').value = index;
+            document.getElementById('editIP').value = srv.ip;
+            document.getElementById('editPort').value = srv.port;
+            document.getElementById('editUsername').value = srv.username;
+            document.getElementById('editPassword').value = srv.password;
+            document.getElementById('editDirectory').value = srv.directory;
+            document.getElementById('editFilenamePattern').value = srv.filename_pattern || '';
+            openModal('editServerModal');
+        }
+
+        async function updateServer() {
+            const systemName = document.getElementById('editSystemName').value;
+            const index = document.getElementById('editServerIndex').value;
+            const server = {
+                ip: document.getElementById('editIP').value.trim(),
+                port: document.getElementById('editPort').value,
+                username: document.getElementById('editUsername').value.trim(),
+                password: document.getElementById('editPassword').value,
+                directory: document.getElementById('editDirectory').value.trim(),
+                filename_pattern: document.getElementById('editFilenamePattern').value.trim()
+            };
+            if (!server.ip || !server.username || !server.directory) {
+                alert('IP、用户名和目录不能为空');
+                return;
+            }
+            const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/servers/${index}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(server)
+            });
+            const data = await res.json();
+            if (res.ok) {
+                closeModal('editServerModal');
+                showToast('更新成功', 'success');
+                loadSystems();
+            } else {
+                alert(data.error);
+            }
+        }
+
+        async function testServer(systemName, index, btn) {
+            btn.disabled = true;
+            btn.textContent = '测试中...';
+            try {
+                const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/servers/${index}/test`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast('连接成功', 'success');
+                } else {
+                    showToast(`连接失败: ${data.message}`, 'error');
+                }
+            } catch (e) {
+                showToast(`测试失败: ${e.message}`, 'error');
+            }
+            btn.disabled = false;
+            btn.textContent = '测试连接';
+        }
+
+        function showBatchPatternModal(systemName) {
+            const system = currentSystems.find(s => s.name === systemName);
+            if (!system) return;
+            
+            const patterns = system.servers.map(s => s.filename_pattern || '').filter(p => p);
+            const commonPattern = patterns.length > 0 ? patterns[0] : '';
+            const allSame = patterns.every(p => p === commonPattern);
+            
+            document.getElementById('batchSystemName').value = systemName;
+            document.getElementById('batchFilenamePattern').value = allSame ? commonPattern : '';
+            openModal('batchPatternModal');
+        }
+
+        async function batchUpdatePattern() {
+            const systemName = document.getElementById('batchSystemName').value;
+            const pattern = document.getElementById('batchFilenamePattern').value.trim();
+            
+            const system = currentSystems.find(s => s.name === systemName);
+            if (!system) return;
+
+            let successCount = 0;
+            let failCount = 0;
+
+            for (let i = 0; i < system.servers.length; i++) {
+                const srv = system.servers[i];
+                const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/servers/${i}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ip: srv.ip,
+                        port: srv.port,
+                        username: srv.username,
+                        password: srv.password,
+                        directory: srv.directory,
+                        filename_pattern: pattern
+                    })
+                });
+                if (res.ok) {
+                    successCount++;
+                } else {
+                    failCount++;
+                }
+            }
+
+            closeModal('batchPatternModal');
+            if (failCount === 0) {
+                showToast(`批量修改成功，共更新${successCount}台服务器`, 'success');
+            } else {
+                showToast(`批量修改完成，成功${successCount}台，失败${failCount}台`, 'error');
+            }
+            loadSystems();
+        }
+
+        function showToast(message, type) {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.classList.add('show'), 10);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+    </script>
+</body>
+</html>

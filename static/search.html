@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日志搜索</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
+        .header { background: #fff; padding: 15px 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .search-area { display: flex; gap: 15px; align-items: flex-end; }
+        .form-group { flex: 1; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; color: #333; font-size: 14px; }
+        .form-group input { width: 100%; padding: 10px 12px; border: 2px solid #ddd; border-radius: 6px; font-size: 14px; }
+        .form-group input:focus { outline: none; border-color: #007bff; }
+        .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-primary:hover { background: #0056b3; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover { background: #218838; }
+        .main { flex: 1; display: flex; overflow: hidden; }
+        .sidebar { width: 350px; background: #fff; border-right: 1px solid #ddd; overflow-y: auto; display: none; }
+        .sidebar.active { display: block; }
+        .sidebar-header { padding: 15px; background: #f8f9fa; border-bottom: 1px solid #ddd; font-weight: 600; }
+        .content { flex: 1; overflow-y: auto; padding: 20px; }
+        .server-node { border-bottom: 1px solid #eee; }
+        .server-header { padding: 12px 15px; background: #f8f9fa; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 500; }
+        .server-header:hover { background: #e9ecef; }
+        .server-header .icon { transition: transform 0.2s; }
+        .server-header .icon.expanded { transform: rotate(90deg); }
+        .file-list { display: none; padding-left: 20px; }
+        .file-list.active { display: block; }
+        .file-item { padding: 8px 15px; cursor: pointer; display: flex; align-items: center; gap: 8px; color: #666; font-size: 13px; }
+        .file-item:hover { background: #e9ecef; }
+        .file-item.selected { background: #007bff; color: white; }
+        .file-item .match-count { background: #28a745; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px; }
+        .no-result { padding: 30px; text-align: center; color: #999; }
+        .log-viewer { background: #1e1e1e; color: #d4d4d4; border-radius: 8px; overflow: hidden; }
+        .log-header { padding: 15px; background: #2d2d2d; border-bottom: 1px solid #444; display: flex; justify-content: space-between; align-items: center; }
+        .log-path { font-family: monospace; color: #9cdcfe; font-size: 13px; }
+        .log-content { padding: 15px; font-family: monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: calc(100vh - 250px); overflow-y: auto; }
+        .log-line { padding: 2px 0; }
+        .log-line .line-num { color: #858585; margin-right: 15px; user-select: none; }
+        .log-line.highlight { background: #264f78; }
+        .loading { text-align: center; padding: 40px; color: #666; }
+        .spinner { display: inline-block; width: 24px; height: 24px; border: 4px solid #ddd; border-top-color: #007bff; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 12px; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 24px; border-radius: 6px; color: white; font-size: 14px; z-index: 9999; opacity: 0; transition: opacity 0.3s; }
+        .toast.show { opacity: 1; }
+        .toast.success { background: #28a745; }
+        .toast.error { background: #dc3545; }
+        .load-more { text-align: center; padding: 15px; }
+        .load-more button { padding: 8px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .load-more button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="search-area">
+            <div class="form-group" style="flex: 1;">
+                <label>系统名称</label>
+                <input type="text" id="systemName" readonly style="background: #f8f9fa;">
+            </div>
+            <div class="form-group" style="flex: 2;">
+                <label>搜索关键字</label>
+                <input type="text" id="searchKeyword" placeholder="请输入搜索关键字" maxlength="200" autofocus>
+            </div>
+            <div class="form-group" style="flex: 0.5;">
+                <label>上下文行数</label>
+                <input type="number" id="contextLines" value="0" min="0" max="50">
+            </div>
+            <button class="btn btn-primary" onclick="searchLogs()">搜索</button>
+            <button class="btn btn-success" onclick="downloadAll()" id="downloadBtn" style="display:none;">下载压缩包</button>
+        </div>
+    </div>
+    <div class="main">
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-header">服务器文件列表</div>
+            <div id="fileTree"></div>
+        </div>
+        <div class="content" id="content">
+            <div class="no-result">请输入关键字开始搜索</div>
+        </div>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const systemName = params.get('system');
+        document.getElementById('systemName').value = systemName || '';
+
+        let searchData = null;
+        let selectedFile = null;
+        const PAGE_SIZE = 100;
+
+        document.getElementById('searchKeyword').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') searchLogs();
+        });
+
+        async function searchLogs() {
+            const keyword = document.getElementById('searchKeyword').value.trim();
+            const contextLines = document.getElementById('contextLines').value;
+
+            if (!keyword) { alert('请输入搜索关键字'); return; }
+            if (keyword.length > 200) { alert('关键字长度不能超过200个字符'); return; }
+            if (!systemName) { alert('系统名称无效'); return; }
+
+            const content = document.getElementById('content');
+            const sidebar = document.getElementById('sidebar');
+            const tree = document.getElementById('fileTree');
+
+            content.innerHTML = '<div class="loading"><span class="spinner"></span>正在搜索...</div>';
+            sidebar.classList.add('active');
+            tree.innerHTML = '<div class="loading" style="padding:20px;font-size:13px;">正在连接服务器...</div>';
+            document.getElementById('downloadBtn').style.display = 'none';
+
+            searchData = { results: [] };
+            let serverIndex = 0;
+
+            const response = await fetch('/api/search/stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ system: systemName, keyword, context_lines: parseInt(contextLines) })
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6);
+                        if (data === '[DONE]') {
+                            document.getElementById('downloadBtn').style.display = 'inline-block';
+                            content.innerHTML = '<div class="no-result">请在左侧选择文件查看日志</div>';
+
+                            continue;
+                        }
+                        try {
+                            const serverResult = JSON.parse(data);
+                            searchData.results.push(serverResult);
+                            appendServerToTree(serverResult, serverIndex);
+                            serverIndex++;
+                        } catch (e) {
+                            console.error('解析错误:', e);
+                        }
+                    }
+                }
+            }
+        }
+
+        function appendServerToTree(server, si) {
+            const tree = document.getElementById('fileTree');
+            const loading = tree.querySelector('.loading');
+            if (loading) loading.remove();
+
+            const hasFiles = !server.error && server.files.length > 0;
+            let html = `<div class="server-node" id="server-${si}">`;
+            html += `<div class="server-header" onclick="toggleServer(this)">
+                <span class="icon">▶</span>
+                <span>${server.server}</span>
+                ${server.error ? '<span style="color:#dc3545;font-size:12px;">(连接失败)</span>' : ''}
+                ${!server.error && server.files.length === 0 ? '<span style="color:#999;font-size:12px;">(无匹配)</span>' : ''}
+            </div>`;
+
+            if (hasFiles) {
+                html += `<div class="file-list">`;
+                server.files.forEach((file, fi) => {
+                    const matchCount = (file.content.match(/\n/g) || []).length + 1;
+                    html += `<div class="file-item" onclick="selectFile(${si}, ${fi}, this)" data-key="${si}-${fi}">
+                        <span>📄</span>
+                        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;" title="${file.path}">${file.path}</span>
+                        <span class="match-count">${matchCount}行</span>
+                    </div>`;
+                });
+                html += `</div>`;
+            }
+            html += `</div>`;
+
+            tree.insertAdjacentHTML('beforeend', html);
+        }
+
+
+        function toggleServer(header) {
+            const icon = header.querySelector('.icon');
+            const fileList = header.nextElementSibling;
+            if (fileList) {
+                fileList.classList.toggle('active');
+                icon.classList.toggle('expanded');
+            }
+        }
+
+        function selectFile(si, fi, element) {
+            document.querySelectorAll('.file-item').forEach(el => el.classList.remove('selected'));
+            element.classList.add('selected');
+
+            const server = searchData.results[si];
+            const file = server.files[fi];
+            selectedFile = { si, fi };
+            renderLogContent(server.server, file);
+        }
+
+        function renderLogContent(serverName, file) {
+            const content = document.getElementById('content');
+            const lines = file.content.split('\n').reverse();
+            const totalLines = lines.length;
+            const displayLines = lines.slice(0, PAGE_SIZE);
+            const hasMore = totalLines > PAGE_SIZE;
+
+            let html = `<div class="log-viewer">`;
+            html += `<div class="log-header">
+                <span class="log-path">${serverName} : ${file.path}</span>
+                <span style="color:#858585;font-size:12px;">共 ${totalLines} 行 (倒序显示)</span>
+            </div>`;
+            html += `<div class="log-content" id="logContent">`;
+
+            displayLines.forEach((line, i) => {
+                html += `<div class="log-line"><span class="line-num">${i + 1}</span>${escapeHtml(line)}</div>`;
+            });
+
+            html += `</div>`;
+
+            if (hasMore) {
+                html += `<div class="load-more" id="loadMore">
+                    <button onclick="loadMoreLines()">加载更多 (剩余 ${totalLines - PAGE_SIZE} 行)</button>
+                </div>`;
+            }
+
+            html += `</div>`;
+            content.innerHTML = html;
+
+            content._allLines = lines;
+            content._displayedCount = PAGE_SIZE;
+        }
+
+        function loadMoreLines() {
+            const content = document.getElementById('content');
+            const logContent = document.getElementById('logContent');
+            const lines = content._allLines;
+            const current = content._displayedCount;
+            const nextBatch = lines.slice(current, current + PAGE_SIZE);
+            const remaining = lines.length - current - nextBatch.length;
+
+            nextBatch.forEach((line, i) => {
+                const div = document.createElement('div');
+                div.className = 'log-line';
+                div.innerHTML = `<span class="line-num">${current + i + 1}</span>${escapeHtml(line)}`;
+                logContent.appendChild(div);
+            });
+
+            content._displayedCount = current + nextBatch.length;
+
+            const loadMore = document.getElementById('loadMore');
+            if (remaining > 0) {
+                loadMore.innerHTML = `<button onclick="loadMoreLines()">加载更多 (剩余 ${remaining} 行)</button>`;
+            } else {
+                loadMore.remove();
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function downloadAll() {
+            if (!searchData) return;
+
+            showToast('正在生成压缩包...', 'success');
+
+            const res = await fetch('/api/search/download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ system: systemName, results: searchData.results })
+            });
+
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `logs_${systemName}_${new Date().toISOString().slice(0, 10)}.zip`;
+                a.click();
+                URL.revokeObjectURL(url);
+                showToast('下载完成', 'success');
+            } else {
+                showToast('下载失败', 'error');
+            }
+        }
+
+        function showToast(message, type) {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.classList.add('show'), 10);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
