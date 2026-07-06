@@ -52,6 +52,10 @@
         .load-more { text-align: center; padding: 15px; }
         .load-more button { padding: 8px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
         .load-more button:hover { background: #0056b3; }
+        .sidebar-container { display: flex; position: relative; }
+        .toggle-btn { width: 24px; background: #f8f9fa; border: 1px solid #ddd; border-left: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #666; }
+        .toggle-btn:hover { background: #e9ecef; }
+        .sidebar.collapsed { width: 0; overflow: hidden; border: none; }
     </style>
 </head>
 <body>
@@ -74,9 +78,15 @@
         </div>
     </div>
     <div class="main">
-        <div class="sidebar" id="sidebar">
-            <div class="sidebar-header">服务器文件列表</div>
-            <div id="fileTree"></div>
+        <div class="sidebar-container">
+            <div class="sidebar" id="sidebar">
+                <div class="sidebar-header">
+                    服务器文件列表
+                    <input type="text" id="fileFilter" placeholder="过滤文件路径..." oninput="filterFiles()" style="width:100%;padding:6px 8px;margin-top:8px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+                </div>
+                <div id="fileTree"></div>
+            </div>
+            <div class="toggle-btn" id="toggleBtn" onclick="toggleSidebar()" title="收起/展开侧边栏">◀</div>
         </div>
         <div class="content" id="content">
             <div class="no-result">请输入关键字开始搜索</div>
@@ -187,6 +197,12 @@
             tree.insertAdjacentHTML('beforeend', html);
         }
 
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const toggleBtn = document.getElementById('toggleBtn');
+            sidebar.classList.toggle('collapsed');
+            toggleBtn.textContent = sidebar.classList.contains('collapsed') ? '▶' : '◀';
+        }
 
         function toggleServer(header) {
             const icon = header.querySelector('.icon');
@@ -195,6 +211,27 @@
                 fileList.classList.toggle('active');
                 icon.classList.toggle('expanded');
             }
+        }
+
+        function filterFiles() {
+            const keyword = document.getElementById('fileFilter').value.toLowerCase();
+            const fileItems = document.querySelectorAll('.file-item');
+            const serverNodes = document.querySelectorAll('.server-node');
+
+            fileItems.forEach(item => {
+                const path = item.querySelector('span[title]').getAttribute('title').toLowerCase();
+                const match = !keyword || path.includes(keyword);
+                item.style.display = match ? '' : 'none';
+            });
+
+            serverNodes.forEach(node => {
+                const fileList = node.querySelector('.file-list');
+                if (fileList) {
+                    const visibleItems = fileList.querySelectorAll('.file-item[style=""], .file-item:not([style])');
+                    const hasVisible = Array.from(fileList.querySelectorAll('.file-item')).some(item => item.style.display !== 'none');
+                    fileList.style.display = hasVisible ? '' : 'none';
+                }
+            });
         }
 
         function selectFile(si, fi, element) {
@@ -209,7 +246,7 @@
 
         function renderLogContent(serverName, file) {
             const content = document.getElementById('content');
-            const lines = file.content.split('\n').reverse();
+            const lines = file.content.split('\n');
             const totalLines = lines.length;
             const displayLines = lines.slice(0, PAGE_SIZE);
             const hasMore = totalLines > PAGE_SIZE;
@@ -217,7 +254,7 @@
             let html = `<div class="log-viewer">`;
             html += `<div class="log-header">
                 <span class="log-path">${serverName} : ${file.path}</span>
-                <span style="color:#858585;font-size:12px;">共 ${totalLines} 行 (倒序显示)</span>
+                <span style="color:#858585;font-size:12px;">共 ${totalLines} 行 (匹配块倒序，上下文正序)</span>
             </div>`;
             html += `<div class="log-content" id="logContent">`;
 

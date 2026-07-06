@@ -372,15 +372,17 @@ def search_server_logs(server, keyword, context_lines):
             output = stdout.read().decode('utf-8', errors='ignore')
 
             if output.strip():
-                line_count = output.count('\n') + 1
+                blocks = re.split(r'\n--\n', output.strip())
+                blocks.reverse()
+                reversed_output = '\n--\n'.join(blocks)
+                line_count = reversed_output.count('\n') + 1
                 logger.info(f'[搜索服务器] {ip}:{port} 文件={log_file} 匹配{line_count}行')
                 result['files'].append({
                     'path': log_file,
-                    'content': output.strip()
+                    'content': reversed_output
                 })
 
         ssh.close()
-        result['files'].reverse()
         logger.info(f'[搜索服务器] 完成: {ip}:{port}, 匹配文件数={len(result["files"])}')
     except Exception as e:
         result['error'] = str(e)
