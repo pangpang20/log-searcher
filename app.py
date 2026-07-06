@@ -4,6 +4,8 @@ import re
 import logging
 import zipfile
 import io
+import base64
+import hashlib
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 from flask import Flask, request, jsonify, send_from_directory, send_file
@@ -13,7 +15,47 @@ app = Flask(__name__, static_folder='static')
 
 BASE_DIR = os.path.dirname(__file__)
 DATA_FILE = os.path.join(BASE_DIR, 'data', 'systems.json')
+KEY_FILE = os.path.join(BASE_DIR, 'data', '.secret_key')
 LOG_DIR = os.path.join(BASE_DIR, 'logs')
+
+
+def get_secret_key():
+    if os.path.exists(KEY_FILE):
+        with open(KEY_FILE, 'r') as f:
+            return f.read().strip()
+    key = base64.urlsafe_b64encode(os.urandom(32)).decode()
+    os.makedirs(os.path.dirname(KEY_FILE), exist_ok=True)
+    with open(KEY_FILE, 'w') as f:
+        f.write(key)
+    return key
+
+
+SECRET_KEY = get_secret_key()
+
+
+def encrypt_password(password):
+    if not password:
+        return ''
+    key_bytes = hashlib.sha256(SECRET_KEY.encode()).digest()
+    password_bytes = password.encode('utf-8')
+    encrypted = bytearray()
+    for i, b in enumerate(password_bytes):
+        encrypted.append(b ^ key_bytes[i % len(key_bytes)])
+    return base64.urlsafe_b64encode(encrypted).decode()
+
+
+def decrypt_password(encrypted_password):
+    if not encrypted_password:
+        return ''
+    try:
+        key_bytes = hashlib.sha256(SECRET_KEY.encode()).digest()
+        encrypted_bytes = base64.urlsafe_b64decode(encrypted_password)
+        decrypted = bytearray()
+        for i, b in enumerate(encrypted_bytes):
+            decrypted.append(b ^ key_bytes[i % len(key_bytes)])
+        return decrypted.decode('utf-8')
+    except Exception:
+        return encrypted_password
 
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -44,14 +86,30 @@ logger.addHandler(console_handler)
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+            for system in data:
+                for server in system.get('servers', []):
+                    if 'password' in server:
+                        server['password'] = decrypt_password(server['password'])
+            return data
     return []
 
 
 def save_data(data):
     os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+    encrypted_data = []
+    for system in data:
+        encrypted_system = system.copy()
+        encrypted_servers = []
+        for server in system.get('servers', []):
+            encrypted_server = server.copy()
+            if 'password' in encrypted_server:
+                encrypted_server['password'] = encrypt_password(encrypted_server['password'])
+            encrypted_servers.append(encrypted_server)
+        encrypted_system['servers'] = encrypted_servers
+        encrypted_data.append(encrypted_system)
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(encrypted_data, f, ensure_ascii=False, indent=2)
 
 
 @app.route('/')
@@ -207,7 +265,9 @@ def test_server(name, index):
                         port=server['port'],
                         username=server['username'],
                         password=server['password'],
-                        timeout=10
+                        timeout=30,
+                        banner_timeout=30,
+                        auth_timeout=30
                     )
                     ssh.close()
                     logger.info(f'[测试连接] 成功: 系统="{name}", 服务器={server["ip"]}:{server["port"]}')
@@ -343,50 +403,61 @@ def search_server_logs(server, keyword, context_lines):
         'error': None
     }
 
-    try:
-        logger.info(f'[搜索服务器] 开始: {ip}:{port}, 目录={directory}, 文件匹配={filename_pattern or "全部"}')
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(ip, port=port, username=username, password=password, timeout=10)
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            logger.info(f'[搜索服务器] 开始: {ip}:{port}, 目录={directory}, 文件匹配={filename_pattern or "全部"}')
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(ip, port=port, username=username, password=password, timeout=30, banner_timeout=30, auth_timeout=30)
+            transport = ssh.get_transport()
+            if transport:
+                transport.set_keepalive(15)
 
-        if filename_pattern:
-            patterns = [p.strip() for p in filename_pattern.split(',') if p.strip()]
-            find_parts = []
-            for p in patterns:
-                find_parts.append(f"-name '*{p}*'")
-            find_cmd = f"find {directory} -type f \\( {' -o '.join(find_parts)} \\) 2>/dev/null"
-        else:
-            find_cmd = f"find {directory} -type f 2>/dev/null"
+            if filename_pattern:
+                patterns = [p.strip() for p in filename_pattern.split(',') if p.strip()]
+                find_parts = []
+                for p in patterns:
+                    find_parts.append(f"-name '*{p}*'")
+                find_cmd = f"find {directory} -type f \\( {' -o '.join(find_parts)} \\) 2>/dev/null"
+            else:
+                find_cmd = f"find {directory} -type f 2>/dev/null"
 
-        logger.info(f'[搜索服务器] {ip}:{port} 执行命令: {find_cmd}')
-        stdin, stdout, stderr = ssh.exec_command(find_cmd)
-        file_list = stdout.read().decode('utf-8').strip().split('\n')
-        file_list = [f for f in file_list if f]
-        logger.info(f'[搜索服务器] {ip}:{port} 找到{len(file_list)}个文件')
+            logger.info(f'[搜索服务器] {ip}:{port} 执行命令: {find_cmd}')
+            stdin, stdout, stderr = ssh.exec_command(find_cmd, timeout=60)
+            file_list = stdout.read().decode('utf-8').strip().split('\n')
+            file_list = [f for f in file_list if f]
+            logger.info(f'[搜索服务器] {ip}:{port} 找到{len(file_list)}个文件')
 
-        for log_file in file_list:
-            safe_keyword = keyword.replace("\\", "\\\\").replace("'", "'\\''")
-            grep_cmd = f"grep -F -n -i -A {context_lines} -B {context_lines} -- '{safe_keyword}' '{log_file}' 2>/dev/null"
-            logger.info(f'[搜索服务器] {ip}:{port} 执行命令: {grep_cmd}')
-            stdin, stdout, stderr = ssh.exec_command(grep_cmd)
-            output = stdout.read().decode('utf-8', errors='ignore')
+            for log_file in file_list:
+                safe_keyword = keyword.replace("\\", "\\\\").replace("'", "'\\''")
+                grep_cmd = f"grep -F -n -i -A {context_lines} -B {context_lines} -- '{safe_keyword}' '{log_file}' 2>/dev/null"
+                logger.info(f'[搜索服务器] {ip}:{port} 执行命令: {grep_cmd}')
+                stdin, stdout, stderr = ssh.exec_command(grep_cmd, timeout=60)
+                output = stdout.read().decode('utf-8', errors='ignore')
 
-            if output.strip():
-                blocks = re.split(r'\n--\n', output.strip())
-                blocks.reverse()
-                reversed_output = '\n--\n'.join(blocks)
-                line_count = reversed_output.count('\n') + 1
-                logger.info(f'[搜索服务器] {ip}:{port} 文件={log_file} 匹配{line_count}行')
-                result['files'].append({
-                    'path': log_file,
-                    'content': reversed_output
-                })
+                if output.strip():
+                    blocks = re.split(r'\n--\n', output.strip())
+                    blocks.reverse()
+                    reversed_output = '\n--\n'.join(blocks)
+                    line_count = reversed_output.count('\n') + 1
+                    logger.info(f'[搜索服务器] {ip}:{port} 文件={log_file} 匹配{line_count}行')
+                    result['files'].append({
+                        'path': log_file,
+                        'content': reversed_output
+                    })
 
-        ssh.close()
-        logger.info(f'[搜索服务器] 完成: {ip}:{port}, 匹配文件数={len(result["files"])}')
-    except Exception as e:
-        result['error'] = str(e)
-        logger.error(f'[搜索服务器] 失败: {ip}:{port}, 错误={str(e)}')
+            ssh.close()
+            logger.info(f'[搜索服务器] 完成: {ip}:{port}, 匹配文件数={len(result["files"])}')
+            return result
+        except Exception as e:
+            logger.error(f'[搜索服务器] 失败(尝试{attempt+1}/{max_retries}): {ip}:{port}, 错误={str(e)}')
+            if attempt == max_retries - 1:
+                result['error'] = str(e)
+            try:
+                ssh.close()
+            except:
+                pass
 
     return result
 

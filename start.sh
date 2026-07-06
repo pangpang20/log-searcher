@@ -26,10 +26,10 @@ start() {
     echo "正在启动日志搜索系统..."
     cd "$SCRIPT_DIR"
 
-    check_and_install_deps
-    if [ $? -ne 0 ]; then
-        return 1
-    fi
+    #check_and_install_deps
+    #if [ $? -ne 0 ]; then
+    #    return 1
+    #fi
 
     nohup python3 app.py > "$LOG_FILE" 2>&1 &
     PID=$!
