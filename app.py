@@ -257,23 +257,19 @@ def test_server(name, index):
             if 0 <= index < len(s['servers']):
                 server = s['servers'][index]
                 logger.info(f'[测试连接] 开始: 系统="{name}", 服务器={server["ip"]}:{server["port"]}, 用户={server["username"]}')
+                ssh = None
                 try:
-                    ssh = paramiko.SSHClient()
-                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                    ssh.connect(
-                        server['ip'],
-                        port=server['port'],
-                        username=server['username'],
-                        password=server['password'],
-                        timeout=30,
-                        banner_timeout=30,
-                        auth_timeout=30
-                    )
+                    ssh = create_ssh_connection(server['ip'], server['port'], server['username'], server['password'])
                     ssh.close()
                     logger.info(f'[测试连接] 成功: 系统="{name}", 服务器={server["ip"]}:{server["port"]}')
                     return jsonify({'success': True, 'message': '连接成功'})
                 except Exception as e:
                     logger.error(f'[测试连接] 失败: 系统="{name}", 服务器={server["ip"]}:{server["port"]}, 错误={str(e)}')
+                    if ssh:
+                        try:
+                            ssh.close()
+                        except:
+                            pass
                     return jsonify({'success': False, 'message': str(e)})
             logger.warning(f'[测试连接] 失败: 系统="{name}", 索引={index}无效')
             return jsonify({'error': '服务器索引无效'}), 400
@@ -389,6 +385,16 @@ def download_logs():
     )
 
 
+def create_ssh_connection(ip, port, username, password):
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(ip, port=port, username=username, password=password, timeout=30, banner_timeout=30, auth_timeout=30)
+    transport = ssh.get_transport()
+    if transport:
+        transport.set_keepalive(15)
+    return ssh
+
+
 def search_server_logs(server, keyword, context_lines):
     ip = server['ip']
     port = server['port']
@@ -404,15 +410,11 @@ def search_server_logs(server, keyword, context_lines):
     }
 
     max_retries = 2
+    ssh = None
     for attempt in range(max_retries):
         try:
-            logger.info(f'[搜索服务器] 开始: {ip}:{port}, 目录={directory}, 文件匹配={filename_pattern or "全部"}')
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(ip, port=port, username=username, password=password, timeout=30, banner_timeout=30, auth_timeout=30)
-            transport = ssh.get_transport()
-            if transport:
-                transport.set_keepalive(15)
+            logger.info(f'[搜索服务器] 开始(尝试{attempt+1}/{max_retries}): {ip}:{port}, 目录={directory}, 文件匹配={filename_pattern or "全部"}')
+            ssh = create_ssh_connection(ip, port, username, password)
 
             if filename_pattern:
                 patterns = [p.strip() for p in filename_pattern.split(',') if p.strip()]
@@ -452,12 +454,17 @@ def search_server_logs(server, keyword, context_lines):
             return result
         except Exception as e:
             logger.error(f'[搜索服务器] 失败(尝试{attempt+1}/{max_retries}): {ip}:{port}, 错误={str(e)}')
+            if ssh:
+                try:
+                    ssh.close()
+                except:
+                    pass
             if attempt == max_retries - 1:
                 result['error'] = str(e)
-            try:
-                ssh.close()
-            except:
-                pass
+            else:
+                import time
+                time.sleep(2)
+                logger.info(f'[搜索服务器] 重试连接: {ip}:{port}')
 
     return result
 
