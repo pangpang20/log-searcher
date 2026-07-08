@@ -173,6 +173,73 @@
         </div>
     </div>
 
+    <div id="addK8sModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title">添加K8s目标</span>
+                <button class="modal-close" onclick="closeModal('addK8sModal')">&times;</button>
+            </div>
+            <input type="hidden" id="k8sSystemName">
+            <div class="form-group">
+                <label>kubeconfig路径</label>
+                <input type="text" id="k8sKubeconfig" placeholder="如: /root/.kube/config">
+            </div>
+            <div class="form-group">
+                <label>Namespace</label>
+                <input type="text" id="k8sNamespace" value="default" placeholder="如: default">
+            </div>
+            <div class="form-group">
+                <label>Pod名称匹配</label>
+                <input type="text" id="k8sPodPattern" placeholder="留空匹配所有Pod，多个用逗号分隔，如: my-app,order-service">
+            </div>
+            <div class="form-group">
+                <label>容器名称</label>
+                <input type="text" id="k8sContainer" placeholder="多容器Pod时指定，留空则取第一个容器">
+            </div>
+            <div class="form-group">
+                <label>Context</label>
+                <input type="text" id="k8sContext" placeholder="留空使用kubeconfig默认context">
+            </div>
+            <div style="text-align: right;">
+                <button class="btn btn-primary" onclick="addK8sTarget()">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="editK8sModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title">编辑K8s目标</span>
+                <button class="modal-close" onclick="closeModal('editK8sModal')">&times;</button>
+            </div>
+            <input type="hidden" id="editK8sSystemName">
+            <input type="hidden" id="editK8sIndex">
+            <div class="form-group">
+                <label>kubeconfig路径</label>
+                <input type="text" id="editK8sKubeconfig" placeholder="如: /root/.kube/config">
+            </div>
+            <div class="form-group">
+                <label>Namespace</label>
+                <input type="text" id="editK8sNamespace" placeholder="如: default">
+            </div>
+            <div class="form-group">
+                <label>Pod名称匹配</label>
+                <input type="text" id="editK8sPodPattern" placeholder="留空匹配所有Pod，多个用逗号分隔">
+            </div>
+            <div class="form-group">
+                <label>容器名称</label>
+                <input type="text" id="editK8sContainer" placeholder="多容器Pod时指定，留空则取第一个容器">
+            </div>
+            <div class="form-group">
+                <label>Context</label>
+                <input type="text" id="editK8sContext" placeholder="留空使用kubeconfig默认context">
+            </div>
+            <div style="text-align: right;">
+                <button class="btn btn-primary" onclick="updateK8sTarget()">保存</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentSystems = [];
 
@@ -198,6 +265,7 @@
                         <div class="system-actions">
                             <button class="btn btn-success btn-sm" onclick="showSearchModal('${sys.name}')">搜索日志</button>
                             <button class="btn btn-primary btn-sm" onclick="showAddServerModal('${sys.name}')">添加服务器</button>
+                            <button class="btn btn-info btn-sm" onclick="showAddK8sModal('${sys.name}')">添加K8s目标</button>
                             <button class="btn btn-secondary btn-sm" onclick="showBatchPatternModal('${sys.name}')">批量修改文件匹配</button>
                             <button class="btn btn-danger btn-sm" onclick="deleteSystem('${sys.name}')">删除系统</button>
                         </div>
@@ -213,6 +281,19 @@
                                     <button class="btn btn-info btn-sm" onclick="copyServer('${sys.name}', ${i})">复制</button>
                                     <button class="btn btn-warning btn-sm" onclick="showEditServerModal('${sys.name}', ${i})">编辑</button>
                                     <button class="btn btn-danger btn-sm" onclick="deleteServer('${sys.name}', ${i})">删除</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                        <div style="padding:10px 0 5px;font-weight:600;color:#555;font-size:14px;">K8s 目标</div>
+                        ${(sys.k8s_targets||[]).length === 0 ? '<div class="no-result">暂无K8s目标</div>' : (sys.k8s_targets||[]).map((kt, i) => `
+                            <div class="server-item">
+                                <div class="server-info">
+                                    <strong>NS: ${kt.namespace}</strong> | kubeconfig: ${kt.kubeconfig}${kt.pod_pattern ? ' | Pod匹配: ' + kt.pod_pattern : ''}${kt.container ? ' | 容器: ' + kt.container : ''}${kt.context ? ' | Context: ' + kt.context : ''}
+                                </div>
+                                <div class="server-actions">
+                                    <button class="btn-test" onclick="testK8s('${sys.name}', ${i}, this)">测试连接</button>
+                                    <button class="btn btn-warning btn-sm" onclick="showEditK8sModal('${sys.name}', ${i})">编辑</button>
+                                    <button class="btn btn-danger btn-sm" onclick="deleteK8s('${sys.name}', ${i})">删除</button>
                                 </div>
                             </div>
                         `).join('')}
@@ -242,7 +323,7 @@
         }
 
         function showSearchModal(systemName) {
-            window.open(`/search.html?system=${encodeURIComponent(systemName)}`, '_blank');
+            window.open(`/search.html?system=${encodeURIComponent(systemName)}`, `log_search_${systemName}`);
         }
 
         function openModal(id) {
@@ -463,6 +544,113 @@
                 toast.classList.remove('show');
                 setTimeout(() => toast.remove(), 300);
             }, 3000);
+        }
+
+        // K8s target management
+        function showAddK8sModal(systemName) {
+            document.getElementById('k8sSystemName').value = systemName;
+            document.getElementById('k8sKubeconfig').value = '';
+            document.getElementById('k8sNamespace').value = 'default';
+            document.getElementById('k8sPodPattern').value = '';
+            document.getElementById('k8sContainer').value = '';
+            document.getElementById('k8sContext').value = '';
+            openModal('addK8sModal');
+        }
+
+        async function addK8sTarget() {
+            const systemName = document.getElementById('k8sSystemName').value;
+            const target = {
+                kubeconfig: document.getElementById('k8sKubeconfig').value.trim(),
+                namespace: document.getElementById('k8sNamespace').value.trim(),
+                pod_pattern: document.getElementById('k8sPodPattern').value.trim(),
+                container: document.getElementById('k8sContainer').value.trim(),
+                context: document.getElementById('k8sContext').value.trim()
+            };
+            if (!target.kubeconfig || !target.namespace) {
+                alert('kubeconfig路径和namespace不能为空');
+                return;
+            }
+            const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/k8s`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(target)
+            });
+            const data = await res.json();
+            if (res.ok) {
+                closeModal('addK8sModal');
+                loadSystems();
+            } else {
+                alert(data.error);
+            }
+        }
+
+        function showEditK8sModal(systemName, index) {
+            const system = currentSystems.find(s => s.name === systemName);
+            if (!system || index >= (system.k8s_targets||[]).length) return;
+            const kt = system.k8s_targets[index];
+            document.getElementById('editK8sSystemName').value = systemName;
+            document.getElementById('editK8sIndex').value = index;
+            document.getElementById('editK8sKubeconfig').value = kt.kubeconfig;
+            document.getElementById('editK8sNamespace').value = kt.namespace;
+            document.getElementById('editK8sPodPattern').value = kt.pod_pattern || '';
+            document.getElementById('editK8sContainer').value = kt.container || '';
+            document.getElementById('editK8sContext').value = kt.context || '';
+            openModal('editK8sModal');
+        }
+
+        async function updateK8sTarget() {
+            const systemName = document.getElementById('editK8sSystemName').value;
+            const index = document.getElementById('editK8sIndex').value;
+            const target = {
+                kubeconfig: document.getElementById('editK8sKubeconfig').value.trim(),
+                namespace: document.getElementById('editK8sNamespace').value.trim(),
+                pod_pattern: document.getElementById('editK8sPodPattern').value.trim(),
+                container: document.getElementById('editK8sContainer').value.trim(),
+                context: document.getElementById('editK8sContext').value.trim()
+            };
+            if (!target.kubeconfig || !target.namespace) {
+                alert('kubeconfig路径和namespace不能为空');
+                return;
+            }
+            const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/k8s/${index}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(target)
+            });
+            const data = await res.json();
+            if (res.ok) {
+                closeModal('editK8sModal');
+                showToast('更新成功', 'success');
+                loadSystems();
+            } else {
+                alert(data.error);
+            }
+        }
+
+        async function deleteK8s(systemName, index) {
+            if (!confirm('确定删除该K8s目标吗？')) return;
+            await fetch(`/api/systems/${encodeURIComponent(systemName)}/k8s/${index}`, { method: 'DELETE' });
+            loadSystems();
+        }
+
+        async function testK8s(systemName, index, btn) {
+            btn.disabled = true;
+            btn.textContent = '测试中...';
+            try {
+                const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/k8s/${index}/test`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast('连接成功', 'success');
+                } else {
+                    showToast(`连接失败: ${data.message}`, 'error');
+                }
+            } catch (e) {
+                showToast(`测试失败: ${e.message}`, 'error');
+            }
+            btn.disabled = false;
+            btn.textContent = '测试连接';
         }
 
     </script>

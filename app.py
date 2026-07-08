@@ -6,6 +6,7 @@ import zipfile
 import io
 import base64
 import hashlib
+import subprocess
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 from flask import Flask, request, jsonify, send_from_directory, send_file
@@ -91,6 +92,8 @@ def load_data():
                 for server in system.get('servers', []):
                     if 'password' in server:
                         server['password'] = decrypt_password(server['password'])
+                if 'k8s_targets' not in system:
+                    system['k8s_targets'] = []
             return data
     return []
 
@@ -277,6 +280,99 @@ def test_server(name, index):
     return jsonify({'error': '系统不存在'}), 404
 
 
+@app.route('/api/systems/<name>/k8s', methods=['POST'])
+def add_k8s_target(name):
+    data = load_data()
+    req = request.json
+    for s in data:
+        if s['name'] == name:
+            target = {
+                'kubeconfig': req.get('kubeconfig', '').strip(),
+                'namespace': req.get('namespace', 'default').strip(),
+                'pod_pattern': req.get('pod_pattern', '').strip(),
+                'container': req.get('container', '').strip(),
+                'context': req.get('context', '').strip()
+            }
+            if not target['kubeconfig'] or not target['namespace']:
+                logger.warning(f'[添加K8s目标] 失败: 系统="{name}", kubeconfig/namespace为空')
+                return jsonify({'error': 'kubeconfig路径和namespace不能为空'}), 400
+            s['k8s_targets'].append(target)
+            save_data(data)
+            logger.info(f'[添加K8s目标] 成功: 系统="{name}", namespace={target["namespace"]}, pod匹配={target["pod_pattern"] or "全部"}')
+            return jsonify(target), 201
+    logger.warning(f'[添加K8s目标] 失败: 系统"{name}"不存在')
+    return jsonify({'error': '系统不存在'}), 404
+
+
+@app.route('/api/systems/<name>/k8s/<int:index>', methods=['PUT'])
+def update_k8s_target(name, index):
+    data = load_data()
+    req = request.json
+    for s in data:
+        if s['name'] == name:
+            if 0 <= index < len(s['k8s_targets']):
+                target = s['k8s_targets'][index]
+                target['kubeconfig'] = req.get('kubeconfig', target['kubeconfig']).strip()
+                target['namespace'] = req.get('namespace', target['namespace']).strip()
+                target['pod_pattern'] = req.get('pod_pattern', target.get('pod_pattern', '')).strip()
+                target['container'] = req.get('container', target.get('container', '')).strip()
+                target['context'] = req.get('context', target.get('context', '')).strip()
+                save_data(data)
+                logger.info(f'[更新K8s目标] 成功: 系统="{name}", 索引={index}, namespace={target["namespace"]}')
+                return jsonify(target)
+            logger.warning(f'[更新K8s目标] 失败: 系统="{name}", 索引={index}无效')
+            return jsonify({'error': 'K8s目标索引无效'}), 400
+    logger.warning(f'[更新K8s目标] 失败: 系统"{name}"不存在')
+    return jsonify({'error': '系统不存在'}), 404
+
+
+@app.route('/api/systems/<name>/k8s/<int:index>', methods=['DELETE'])
+def delete_k8s_target(name, index):
+    data = load_data()
+    for s in data:
+        if s['name'] == name:
+            if 0 <= index < len(s['k8s_targets']):
+                target = s['k8s_targets'][index]
+                s['k8s_targets'].pop(index)
+                save_data(data)
+                logger.info(f'[删除K8s目标] 成功: 系统="{name}", namespace={target["namespace"]}, 索引={index}')
+                return jsonify({'message': '删除成功'})
+            logger.warning(f'[删除K8s目标] 失败: 系统="{name}", 索引={index}无效')
+            return jsonify({'error': 'K8s目标索引无效'}), 400
+    logger.warning(f'[删除K8s目标] 失败: 系统"{name}"不存在')
+    return jsonify({'error': '系统不存在'}), 404
+
+
+@app.route('/api/systems/<name>/k8s/<int:index>/test', methods=['POST'])
+def test_k8s_target(name, index):
+    data = load_data()
+    for s in data:
+        if s['name'] == name:
+            if 0 <= index < len(s['k8s_targets']):
+                target = s['k8s_targets'][index]
+                logger.info(f'[测试K8s连接] 开始: 系统="{name}", namespace={target["namespace"]}')
+                try:
+                    proc = run_kubectl(target['kubeconfig'], target.get('context', ''), target['namespace'],
+                                       ['cluster-info'], timeout=15)
+                    if proc.returncode == 0:
+                        logger.info(f'[测试K8s连接] 成功: 系统="{name}", namespace={target["namespace"]}')
+                        return jsonify({'success': True, 'message': '连接成功'})
+                    else:
+                        error_msg = proc.stderr.strip() or '连接失败'
+                        logger.error(f'[测试K8s连接] 失败: 系统="{name}", 错误={error_msg}')
+                        return jsonify({'success': False, 'message': error_msg})
+                except subprocess.TimeoutExpired:
+                    logger.error(f'[测试K8s连接] 超时: 系统="{name}"')
+                    return jsonify({'success': False, 'message': '连接超时'})
+                except Exception as e:
+                    logger.error(f'[测试K8s连接] 失败: 系统="{name}", 错误={str(e)}')
+                    return jsonify({'success': False, 'message': str(e)})
+            logger.warning(f'[测试K8s连接] 失败: 系统="{name}", 索引={index}无效')
+            return jsonify({'error': 'K8s目标索引无效'}), 400
+    logger.warning(f'[测试K8s连接] 失败: 系统"{name}"不存在')
+    return jsonify({'error': '系统不存在'}), 404
+
+
 @app.route('/api/search', methods=['POST'])
 def search_logs():
     req = request.json
@@ -302,7 +398,8 @@ def search_logs():
         logger.warning(f'[搜索日志] 失败: 系统"{system_name}"不存在')
         return jsonify({'error': '系统不存在'}), 404
 
-    logger.info(f'[搜索日志] 开始: 系统="{system_name}", 关键字="{keyword}", 上下文行数={context_lines}, 服务器数量={len(system["servers"])}')
+    k8s_targets = system.get('k8s_targets', [])
+    logger.info(f'[搜索日志] 开始: 系统="{system_name}", 关键字="{keyword}", 上下文行数={context_lines}, 服务器数量={len(system["servers"])}, K8s目标数量={len(k8s_targets)}')
 
     results = []
     total_files = 0
@@ -314,6 +411,15 @@ def search_logs():
             file_count = len(server_result['files'])
             total_files += file_count
             for f in server_result['files']:
+                total_matches += f['content'].count('\n') + 1
+
+    for target in k8s_targets:
+        k8s_result = search_k8s_target(target, keyword, context_lines)
+        results.append(k8s_result)
+        if not k8s_result['error']:
+            file_count = len(k8s_result['files'])
+            total_files += file_count
+            for f in k8s_result['files']:
                 total_matches += f['content'].count('\n') + 1
 
     logger.info(f'[搜索日志] 完成: 系统="{system_name}", 关键字="{keyword}", 匹配文件数={total_files}, 匹配行数={total_matches}')
@@ -342,12 +448,16 @@ def search_logs_stream():
     if not system:
         return jsonify({'error': '系统不存在'}), 404
 
-    logger.info(f'[搜索日志-流式] 开始: 系统="{system_name}", 关键字="{keyword}", 上下文行数={context_lines}')
+    k8s_targets = system.get('k8s_targets', [])
+    logger.info(f'[搜索日志-流式] 开始: 系统="{system_name}", 关键字="{keyword}", 上下文行数={context_lines}, K8s目标数量={len(k8s_targets)}')
 
     def generate():
         for server in system['servers']:
             server_result = search_server_logs(server, keyword, context_lines)
             yield f"data: {json.dumps(server_result, ensure_ascii=False)}\n\n"
+        for target in k8s_targets:
+            k8s_result = search_k8s_target(target, keyword, context_lines)
+            yield f"data: {json.dumps(k8s_result, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
     return app.response_class(generate(), mimetype='text/event-stream')
@@ -465,6 +575,110 @@ def search_server_logs(server, keyword, context_lines):
                 import time
                 time.sleep(2)
                 logger.info(f'[搜索服务器] 重试连接: {ip}:{port}')
+
+    return result
+
+
+def run_kubectl(kubeconfig, context, namespace, args, timeout=60):
+    cmd = ['kubectl', f'--kubeconfig={kubeconfig}']
+    if context:
+        cmd += [f'--context={context}']
+    cmd += ['-n', namespace] + args
+    logger.info(f'[kubectl] 执行命令: {" ".join(cmd)}')
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return proc
+
+
+def search_k8s_target(target, keyword, context_lines):
+    kubeconfig = target.get('kubeconfig', '')
+    namespace = target.get('namespace', 'default')
+    pod_pattern = target.get('pod_pattern', '')
+    container = target.get('container', '')
+    context = target.get('context', '')
+
+    result = {
+        'server': f'k8s:{namespace}',
+        'files': [],
+        'error': None
+    }
+
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            logger.info(f'[搜索K8s] 开始(尝试{attempt+1}/{max_retries}): namespace={namespace}, pod_pattern={pod_pattern or "全部"}')
+
+            # List pods
+            proc = run_kubectl(kubeconfig, context, namespace, ['get', 'pods', '--no-headers', '-o', 'name'])
+            if proc.returncode != 0:
+                raise Exception(f'kubectl get pods 失败: {proc.stderr.strip()}')
+
+            pod_list = [line.strip() for line in proc.stdout.strip().split('\n') if line.strip()]
+            # Remove 'pod/' prefix
+            pod_list = [p.replace('pod/', '') for p in pod_list]
+            logger.info(f'[搜索K8s] namespace={namespace} 找到{len(pod_list)}个Pod')
+
+            # Filter by pod_pattern
+            if pod_pattern:
+                patterns = [p.strip() for p in pod_pattern.split(',') if p.strip()]
+                filtered = []
+                for pod in pod_list:
+                    for pat in patterns:
+                        if pat in pod:
+                            filtered.append(pod)
+                            break
+                pod_list = filtered
+                logger.info(f'[搜索K8s] namespace={namespace} 过滤后{len(pod_list)}个Pod')
+
+            for pod in pod_list:
+                safe_keyword = keyword.replace("\\", "\\\\").replace("'", "'\\''")
+                log_cmd = ['logs', f'pod/{pod}', '--tail=5000']
+                if container:
+                    log_cmd += [f'--container={container}']
+                proc = run_kubectl(kubeconfig, context, namespace, log_cmd, timeout=60)
+                if proc.returncode != 0:
+                    logger.warning(f'[搜索K8s] 获取Pod日志失败: {pod}, {proc.stderr.strip()}')
+                    continue
+
+                log_output = proc.stdout
+                if not log_output.strip():
+                    continue
+
+                # Grep the log output
+                grep_proc = subprocess.run(
+                    ['grep', '-F', '-n', '-i', '-A', str(context_lines), '-B', str(context_lines), '--', safe_keyword],
+                    input=log_output, capture_output=True, text=True, timeout=60
+                )
+                output = grep_proc.stdout
+
+                if output.strip():
+                    blocks = re.split(r'\n--\n', output.strip())
+                    blocks.reverse()
+                    reversed_output = '\n--\n'.join(blocks)
+                    line_count = reversed_output.count('\n') + 1
+                    logger.info(f'[搜索K8s] Pod={pod} 匹配{line_count}行')
+                    display_name = f'{namespace}/{pod}'
+                    result['files'].append({
+                        'path': display_name,
+                        'content': reversed_output
+                    })
+
+            logger.info(f'[搜索K8s] 完成: namespace={namespace}, 匹配Pod数={len(result["files"])}')
+            return result
+        except subprocess.TimeoutExpired as e:
+            logger.error(f'[搜索K8s] 超时(尝试{attempt+1}/{max_retries}): namespace={namespace}, 错误={str(e)}')
+            if attempt == max_retries - 1:
+                result['error'] = f'命令执行超时: {str(e)}'
+            else:
+                import time
+                time.sleep(2)
+        except Exception as e:
+            logger.error(f'[搜索K8s] 失败(尝试{attempt+1}/{max_retries}): namespace={namespace}, 错误={str(e)}')
+            if attempt == max_retries - 1:
+                result['error'] = str(e)
+            else:
+                import time
+                time.sleep(2)
+                logger.info(f'[搜索K8s] 重试: namespace={namespace}')
 
     return result
 
