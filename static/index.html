@@ -261,7 +261,7 @@
             container.innerHTML = currentSystems.map((sys, idx) => `
                 <div class="system-card">
                     <div class="system-header">
-                        <span class="system-name" onclick="toggleServers(${idx})" style="cursor: pointer;">${sys.name} (${sys.servers.length}台服务器)</span>
+                        <span class="system-name" onclick="toggleServers(${idx})" style="cursor: pointer;">${sys.name}${sys.servers.length > 0 ? ' (' + sys.servers.length + '台服务器)' : ''}${(sys.k8s_targets||[]).length > 0 ? ' (' + sys.k8s_targets.length + '台K8s)' : ''}</span>
                         <div class="system-actions">
                             <button class="btn btn-success btn-sm" onclick="showSearchModal('${sys.name}')">搜索日志</button>
                             <button class="btn btn-primary btn-sm" onclick="showAddServerModal('${sys.name}')">添加服务器</button>
