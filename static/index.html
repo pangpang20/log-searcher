@@ -181,8 +181,24 @@
             </div>
             <input type="hidden" id="k8sSystemName">
             <div class="form-group">
+                <label>IP地址</label>
+                <input type="text" id="k8sIP" placeholder="K8s客户端服务器IP">
+            </div>
+            <div class="form-group">
+                <label>端口</label>
+                <input type="number" id="k8sPort" value="22" placeholder="SSH端口">
+            </div>
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="k8sUsername" placeholder="SSH用户名">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="k8sPassword" placeholder="SSH密码">
+            </div>
+            <div class="form-group">
                 <label>kubeconfig路径</label>
-                <input type="text" id="k8sKubeconfig" placeholder="如: /root/.kube/config">
+                <input type="text" id="k8sKubeconfig" placeholder="远程服务器上的kubeconfig路径，留空使用默认">
             </div>
             <div class="form-group">
                 <label>Namespace</label>
@@ -215,8 +231,24 @@
             <input type="hidden" id="editK8sSystemName">
             <input type="hidden" id="editK8sIndex">
             <div class="form-group">
+                <label>IP地址</label>
+                <input type="text" id="editK8sIP" placeholder="K8s客户端服务器IP">
+            </div>
+            <div class="form-group">
+                <label>端口</label>
+                <input type="number" id="editK8sPort" placeholder="SSH端口">
+            </div>
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="editK8sUsername" placeholder="SSH用户名">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="editK8sPassword" placeholder="SSH密码">
+            </div>
+            <div class="form-group">
                 <label>kubeconfig路径</label>
-                <input type="text" id="editK8sKubeconfig" placeholder="如: /root/.kube/config">
+                <input type="text" id="editK8sKubeconfig" placeholder="远程服务器上的kubeconfig路径，留空使用默认">
             </div>
             <div class="form-group">
                 <label>Namespace</label>
@@ -288,7 +320,7 @@
                         ${(sys.k8s_targets||[]).length === 0 ? '<div class="no-result">暂无K8s目标</div>' : (sys.k8s_targets||[]).map((kt, i) => `
                             <div class="server-item">
                                 <div class="server-info">
-                                    <strong>NS: ${kt.namespace}</strong> | kubeconfig: ${kt.kubeconfig}${kt.pod_pattern ? ' | Pod匹配: ' + kt.pod_pattern : ''}${kt.container ? ' | 容器: ' + kt.container : ''}${kt.context ? ' | Context: ' + kt.context : ''}
+                                    <strong>${kt.ip||''}:${kt.port||22}</strong> | 用户: ${kt.username||''} | NS: ${kt.namespace}${kt.kubeconfig ? ' | kubeconfig: ' + kt.kubeconfig : ''}${kt.pod_pattern ? ' | Pod匹配: ' + kt.pod_pattern : ''}${kt.container ? ' | 容器: ' + kt.container : ''}${kt.context ? ' | Context: ' + kt.context : ''}
                                 </div>
                                 <div class="server-actions">
                                     <button class="btn-test" onclick="testK8s('${sys.name}', ${i}, this)">测试连接</button>
@@ -549,6 +581,10 @@
         // K8s target management
         function showAddK8sModal(systemName) {
             document.getElementById('k8sSystemName').value = systemName;
+            document.getElementById('k8sIP').value = '';
+            document.getElementById('k8sPort').value = '22';
+            document.getElementById('k8sUsername').value = '';
+            document.getElementById('k8sPassword').value = '';
             document.getElementById('k8sKubeconfig').value = '';
             document.getElementById('k8sNamespace').value = 'default';
             document.getElementById('k8sPodPattern').value = '';
@@ -560,14 +596,18 @@
         async function addK8sTarget() {
             const systemName = document.getElementById('k8sSystemName').value;
             const target = {
+                ip: document.getElementById('k8sIP').value.trim(),
+                port: document.getElementById('k8sPort').value,
+                username: document.getElementById('k8sUsername').value.trim(),
+                password: document.getElementById('k8sPassword').value,
                 kubeconfig: document.getElementById('k8sKubeconfig').value.trim(),
                 namespace: document.getElementById('k8sNamespace').value.trim(),
                 pod_pattern: document.getElementById('k8sPodPattern').value.trim(),
                 container: document.getElementById('k8sContainer').value.trim(),
                 context: document.getElementById('k8sContext').value.trim()
             };
-            if (!target.kubeconfig || !target.namespace) {
-                alert('kubeconfig路径和namespace不能为空');
+            if (!target.ip || !target.username || !target.namespace) {
+                alert('IP、用户名和namespace不能为空');
                 return;
             }
             const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/k8s`, {
@@ -590,7 +630,11 @@
             const kt = system.k8s_targets[index];
             document.getElementById('editK8sSystemName').value = systemName;
             document.getElementById('editK8sIndex').value = index;
-            document.getElementById('editK8sKubeconfig').value = kt.kubeconfig;
+            document.getElementById('editK8sIP').value = kt.ip || '';
+            document.getElementById('editK8sPort').value = kt.port || 22;
+            document.getElementById('editK8sUsername').value = kt.username || '';
+            document.getElementById('editK8sPassword').value = kt.password || '';
+            document.getElementById('editK8sKubeconfig').value = kt.kubeconfig || '';
             document.getElementById('editK8sNamespace').value = kt.namespace;
             document.getElementById('editK8sPodPattern').value = kt.pod_pattern || '';
             document.getElementById('editK8sContainer').value = kt.container || '';
@@ -602,14 +646,18 @@
             const systemName = document.getElementById('editK8sSystemName').value;
             const index = document.getElementById('editK8sIndex').value;
             const target = {
+                ip: document.getElementById('editK8sIP').value.trim(),
+                port: document.getElementById('editK8sPort').value,
+                username: document.getElementById('editK8sUsername').value.trim(),
+                password: document.getElementById('editK8sPassword').value,
                 kubeconfig: document.getElementById('editK8sKubeconfig').value.trim(),
                 namespace: document.getElementById('editK8sNamespace').value.trim(),
                 pod_pattern: document.getElementById('editK8sPodPattern').value.trim(),
                 container: document.getElementById('editK8sContainer').value.trim(),
                 context: document.getElementById('editK8sContext').value.trim()
             };
-            if (!target.kubeconfig || !target.namespace) {
-                alert('kubeconfig路径和namespace不能为空');
+            if (!target.ip || !target.username || !target.namespace) {
+                alert('IP、用户名和namespace不能为空');
                 return;
             }
             const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/k8s/${index}`, {

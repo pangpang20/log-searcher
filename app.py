@@ -94,6 +94,9 @@ def load_data():
                         server['password'] = decrypt_password(server['password'])
                 if 'k8s_targets' not in system:
                     system['k8s_targets'] = []
+                for target in system.get('k8s_targets', []):
+                    if 'password' in target:
+                        target['password'] = decrypt_password(target['password'])
             return data
     return []
 
@@ -110,6 +113,13 @@ def save_data(data):
                 encrypted_server['password'] = encrypt_password(encrypted_server['password'])
             encrypted_servers.append(encrypted_server)
         encrypted_system['servers'] = encrypted_servers
+        encrypted_k8s = []
+        for target in system.get('k8s_targets', []):
+            encrypted_target = target.copy()
+            if 'password' in encrypted_target:
+                encrypted_target['password'] = encrypt_password(encrypted_target['password'])
+            encrypted_k8s.append(encrypted_target)
+        encrypted_system['k8s_targets'] = encrypted_k8s
         encrypted_data.append(encrypted_system)
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(encrypted_data, f, ensure_ascii=False, indent=2)
@@ -287,18 +297,22 @@ def add_k8s_target(name):
     for s in data:
         if s['name'] == name:
             target = {
+                'ip': req.get('ip', '').strip(),
+                'port': int(req.get('port', 22)),
+                'username': req.get('username', '').strip(),
+                'password': req.get('password', ''),
                 'kubeconfig': req.get('kubeconfig', '').strip(),
                 'namespace': req.get('namespace', 'default').strip(),
                 'pod_pattern': req.get('pod_pattern', '').strip(),
                 'container': req.get('container', '').strip(),
                 'context': req.get('context', '').strip()
             }
-            if not target['kubeconfig'] or not target['namespace']:
-                logger.warning(f'[添加K8s目标] 失败: 系统="{name}", kubeconfig/namespace为空')
-                return jsonify({'error': 'kubeconfig路径和namespace不能为空'}), 400
+            if not target['ip'] or not target['username'] or not target['namespace']:
+                logger.warning(f'[添加K8s目标] 失败: 系统="{name}", IP/用户名/namespace为空')
+                return jsonify({'error': 'IP、用户名和namespace不能为空'}), 400
             s['k8s_targets'].append(target)
             save_data(data)
-            logger.info(f'[添加K8s目标] 成功: 系统="{name}", namespace={target["namespace"]}, pod匹配={target["pod_pattern"] or "全部"}')
+            logger.info(f'[添加K8s目标] 成功: 系统="{name}", 服务器={target["ip"]}:{target["port"]}, namespace={target["namespace"]}, pod匹配={target["pod_pattern"] or "全部"}')
             return jsonify(target), 201
     logger.warning(f'[添加K8s目标] 失败: 系统"{name}"不存在')
     return jsonify({'error': '系统不存在'}), 404
@@ -312,13 +326,17 @@ def update_k8s_target(name, index):
         if s['name'] == name:
             if 0 <= index < len(s['k8s_targets']):
                 target = s['k8s_targets'][index]
-                target['kubeconfig'] = req.get('kubeconfig', target['kubeconfig']).strip()
+                target['ip'] = req.get('ip', target.get('ip', '')).strip()
+                target['port'] = int(req.get('port', target.get('port', 22)))
+                target['username'] = req.get('username', target.get('username', '')).strip()
+                target['password'] = req.get('password', target.get('password', ''))
+                target['kubeconfig'] = req.get('kubeconfig', target.get('kubeconfig', '')).strip()
                 target['namespace'] = req.get('namespace', target['namespace']).strip()
                 target['pod_pattern'] = req.get('pod_pattern', target.get('pod_pattern', '')).strip()
                 target['container'] = req.get('container', target.get('container', '')).strip()
                 target['context'] = req.get('context', target.get('context', '')).strip()
                 save_data(data)
-                logger.info(f'[更新K8s目标] 成功: 系统="{name}", 索引={index}, namespace={target["namespace"]}')
+                logger.info(f'[更新K8s目标] 成功: 系统="{name}", 索引={index}, 服务器={target["ip"]}:{target["port"]}, namespace={target["namespace"]}')
                 return jsonify(target)
             logger.warning(f'[更新K8s目标] 失败: 系统="{name}", 索引={index}无效')
             return jsonify({'error': 'K8s目标索引无效'}), 400
@@ -350,23 +368,33 @@ def test_k8s_target(name, index):
         if s['name'] == name:
             if 0 <= index < len(s['k8s_targets']):
                 target = s['k8s_targets'][index]
-                logger.info(f'[测试K8s连接] 开始: 系统="{name}", namespace={target["namespace"]}')
+                logger.info(f'[测试K8s连接] 开始: 系统="{name}", 服务器={target["ip"]}:{target["port"]}, namespace={target["namespace"]}')
+                ssh = None
                 try:
-                    proc = run_kubectl(target['kubeconfig'], target.get('context', ''), target['namespace'],
-                                       ['cluster-info'], timeout=15)
-                    if proc.returncode == 0:
+                    ssh = create_ssh_connection(target['ip'], target['port'], target['username'], target['password'])
+                    kubeconfig = target.get('kubeconfig', '')
+                    context = target.get('context', '')
+                    cmd = build_kubectl_cmd(kubeconfig, context, target['namespace'], ['cluster-info'])
+                    stdin, stdout, stderr = ssh.exec_command(cmd, timeout=15)
+                    exit_code = stdout.channel.recv_exit_status()
+                    out = stdout.read().decode('utf-8').strip()
+                    err = stderr.read().decode('utf-8').strip()
+                    if exit_code == 0:
                         logger.info(f'[测试K8s连接] 成功: 系统="{name}", namespace={target["namespace"]}')
                         return jsonify({'success': True, 'message': '连接成功'})
                     else:
-                        error_msg = proc.stderr.strip() or '连接失败'
+                        error_msg = err or '连接失败'
                         logger.error(f'[测试K8s连接] 失败: 系统="{name}", 错误={error_msg}')
                         return jsonify({'success': False, 'message': error_msg})
-                except subprocess.TimeoutExpired:
-                    logger.error(f'[测试K8s连接] 超时: 系统="{name}"')
-                    return jsonify({'success': False, 'message': '连接超时'})
                 except Exception as e:
                     logger.error(f'[测试K8s连接] 失败: 系统="{name}", 错误={str(e)}')
                     return jsonify({'success': False, 'message': str(e)})
+                finally:
+                    if ssh:
+                        try:
+                            ssh.close()
+                        except:
+                            pass
             logger.warning(f'[测试K8s连接] 失败: 系统="{name}", 索引={index}无效')
             return jsonify({'error': 'K8s目标索引无效'}), 400
     logger.warning(f'[测试K8s连接] 失败: 系统"{name}"不存在')
@@ -579,17 +607,21 @@ def search_server_logs(server, keyword, context_lines):
     return result
 
 
-def run_kubectl(kubeconfig, context, namespace, args, timeout=60):
-    cmd = ['kubectl', f'--kubeconfig={kubeconfig}']
+def build_kubectl_cmd(kubeconfig, context, namespace, args):
+    parts = ['kubectl']
+    if kubeconfig:
+        parts.append(f'--kubeconfig={kubeconfig}')
     if context:
-        cmd += [f'--context={context}']
-    cmd += ['-n', namespace] + args
-    logger.info(f'[kubectl] 执行命令: {" ".join(cmd)}')
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    return proc
+        parts.append(f'--context={context}')
+    parts += ['-n', namespace] + args
+    return ' '.join(parts)
 
 
 def search_k8s_target(target, keyword, context_lines):
+    ip = target.get('ip', '')
+    port = target.get('port', 22)
+    username = target.get('username', '')
+    password = target.get('password', '')
     kubeconfig = target.get('kubeconfig', '')
     namespace = target.get('namespace', 'default')
     pod_pattern = target.get('pod_pattern', '')
@@ -597,25 +629,30 @@ def search_k8s_target(target, keyword, context_lines):
     context = target.get('context', '')
 
     result = {
-        'server': f'k8s:{namespace}',
+        'server': f'{ip}:{port}({namespace})',
         'files': [],
         'error': None
     }
 
     max_retries = 2
+    ssh = None
     for attempt in range(max_retries):
         try:
-            logger.info(f'[搜索K8s] 开始(尝试{attempt+1}/{max_retries}): namespace={namespace}, pod_pattern={pod_pattern or "全部"}')
+            logger.info(f'[搜索K8s] 开始(尝试{attempt+1}/{max_retries}): {ip}:{port}, namespace={namespace}, pod_pattern={pod_pattern or "全部"}')
+            ssh = create_ssh_connection(ip, port, username, password)
 
             # List pods
-            proc = run_kubectl(kubeconfig, context, namespace, ['get', 'pods', '--no-headers', '-o', 'name'])
-            if proc.returncode != 0:
-                raise Exception(f'kubectl get pods 失败: {proc.stderr.strip()}')
+            cmd = build_kubectl_cmd(kubeconfig, context, namespace, ['get', 'pods', '--no-headers', '-o', 'name'])
+            logger.info(f'[搜索K8s] {ip}:{port} 执行命令: {cmd}')
+            stdin, stdout, stderr = ssh.exec_command(cmd, timeout=60)
+            exit_code = stdout.channel.recv_exit_status()
+            err = stderr.read().decode('utf-8').strip()
+            if exit_code != 0:
+                raise Exception(f'kubectl get pods 失败: {err}')
 
-            pod_list = [line.strip() for line in proc.stdout.strip().split('\n') if line.strip()]
-            # Remove 'pod/' prefix
+            pod_list = [line.strip() for line in stdout.read().decode('utf-8').strip().split('\n') if line.strip()]
             pod_list = [p.replace('pod/', '') for p in pod_list]
-            logger.info(f'[搜索K8s] namespace={namespace} 找到{len(pod_list)}个Pod')
+            logger.info(f'[搜索K8s] {ip}:{port} namespace={namespace} 找到{len(pod_list)}个Pod')
 
             # Filter by pod_pattern
             if pod_pattern:
@@ -627,23 +664,27 @@ def search_k8s_target(target, keyword, context_lines):
                             filtered.append(pod)
                             break
                 pod_list = filtered
-                logger.info(f'[搜索K8s] namespace={namespace} 过滤后{len(pod_list)}个Pod')
+                logger.info(f'[搜索K8s] {ip}:{port} namespace={namespace} 过滤后{len(pod_list)}个Pod')
 
             for pod in pod_list:
-                safe_keyword = keyword.replace("\\", "\\\\").replace("'", "'\\''")
-                log_cmd = ['logs', f'pod/{pod}', '--tail=5000']
+                log_args = ['logs', f'pod/{pod}', '--tail=5000']
                 if container:
-                    log_cmd += [f'--container={container}']
-                proc = run_kubectl(kubeconfig, context, namespace, log_cmd, timeout=60)
-                if proc.returncode != 0:
-                    logger.warning(f'[搜索K8s] 获取Pod日志失败: {pod}, {proc.stderr.strip()}')
+                    log_args += [f'--container={container}']
+                log_cmd = build_kubectl_cmd(kubeconfig, context, namespace, log_args)
+                logger.info(f'[搜索K8s] {ip}:{port} 执行命令: {log_cmd}')
+                stdin, stdout, stderr = ssh.exec_command(log_cmd, timeout=60)
+                exit_code = stdout.channel.recv_exit_status()
+                log_output = stdout.read().decode('utf-8', errors='ignore')
+
+                if exit_code != 0:
+                    logger.warning(f'[搜索K8s] 获取Pod日志失败: {pod}, {stderr.read().decode("utf-8").strip()}')
                     continue
 
-                log_output = proc.stdout
                 if not log_output.strip():
                     continue
 
-                # Grep the log output
+                # Grep the log output locally
+                safe_keyword = keyword.replace("\\", "\\\\").replace("'", "'\\''")
                 grep_proc = subprocess.run(
                     ['grep', '-F', '-n', '-i', '-A', str(context_lines), '-B', str(context_lines), '--', safe_keyword],
                     input=log_output, capture_output=True, text=True, timeout=60
@@ -655,30 +696,29 @@ def search_k8s_target(target, keyword, context_lines):
                     blocks.reverse()
                     reversed_output = '\n--\n'.join(blocks)
                     line_count = reversed_output.count('\n') + 1
-                    logger.info(f'[搜索K8s] Pod={pod} 匹配{line_count}行')
+                    logger.info(f'[搜索K8s] {ip}:{port} Pod={pod} 匹配{line_count}行')
                     display_name = f'{namespace}/{pod}'
                     result['files'].append({
                         'path': display_name,
                         'content': reversed_output
                     })
 
-            logger.info(f'[搜索K8s] 完成: namespace={namespace}, 匹配Pod数={len(result["files"])}')
+            ssh.close()
+            logger.info(f'[搜索K8s] 完成: {ip}:{port} namespace={namespace}, 匹配Pod数={len(result["files"])}')
             return result
-        except subprocess.TimeoutExpired as e:
-            logger.error(f'[搜索K8s] 超时(尝试{attempt+1}/{max_retries}): namespace={namespace}, 错误={str(e)}')
-            if attempt == max_retries - 1:
-                result['error'] = f'命令执行超时: {str(e)}'
-            else:
-                import time
-                time.sleep(2)
         except Exception as e:
-            logger.error(f'[搜索K8s] 失败(尝试{attempt+1}/{max_retries}): namespace={namespace}, 错误={str(e)}')
+            logger.error(f'[搜索K8s] 失败(尝试{attempt+1}/{max_retries}): {ip}:{port}, 错误={str(e)}')
+            if ssh:
+                try:
+                    ssh.close()
+                except:
+                    pass
             if attempt == max_retries - 1:
                 result['error'] = str(e)
             else:
                 import time
                 time.sleep(2)
-                logger.info(f'[搜索K8s] 重试: namespace={namespace}')
+                logger.info(f'[搜索K8s] 重试: {ip}:{port}')
 
     return result
 
