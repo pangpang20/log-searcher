@@ -47,24 +47,40 @@ start() {
 }
 
 stop() {
-    if [ ! -f "$PID_FILE" ]; then
-        echo "应用未在运行"
-        return 1
+    PORT=5001
+
+    # 先尝试通过 PID 文件停止
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "正在停止应用 (PID: $PID)..."
+            kill "$PID"
+            sleep 2
+            if kill -0 "$PID" 2>/dev/null; then
+                kill -9 "$PID"
+            fi
+            echo "已停止"
+            rm -f "$PID_FILE"
+            return 0
+        fi
+        rm -f "$PID_FILE"
     fi
 
-    PID=$(cat "$PID_FILE")
-    if kill -0 "$PID" 2>/dev/null; then
-        echo "正在停止应用 (PID: $PID)..."
+    # PID 文件不存在或进程不在，尝试通过端口查找
+    PID=$(lsof -ti :"$PORT" 2>/dev/null | head -1)
+    if [ -n "$PID" ]; then
+        echo "正在停止端口 $PORT 上的进程 (PID: $PID)..."
         kill "$PID"
         sleep 2
         if kill -0 "$PID" 2>/dev/null; then
             kill -9 "$PID"
         fi
         echo "已停止"
-    else
-        echo "应用未在运行"
+        return 0
     fi
-    rm -f "$PID_FILE"
+
+    echo "应用未在运行"
+    return 1
 }
 
 status() {

@@ -27,8 +27,8 @@
         .system-header { padding: 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; }
         .system-name { font-size: 18px; font-weight: 600; color: #333; }
         .system-actions { display: flex; gap: 8px; }
-        .server-list { padding: 15px; display: none; }
-        .server-list.active { display: block; }
+        .server-list { padding: 15px; display: block; }
+        .server-list.collapsed { display: none; }
         .server-item { padding: 10px; background: #f8f9fa; border-radius: 4px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
         .server-info { font-size: 14px; color: #666; }
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; }
@@ -304,7 +304,7 @@
 
         function toggleServers(idx) {
             const el = document.getElementById(`servers-${idx}`);
-            el.classList.toggle('active');
+            el.classList.toggle('collapsed');
         }
 
         function showAddSystemModal() {
