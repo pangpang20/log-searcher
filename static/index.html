@@ -231,6 +231,14 @@
                 <label>Context</label>
                 <input type="text" id="k8sContext" placeholder="留空使用kubeconfig默认context">
             </div>
+            <div class="form-group">
+                <label>日志目录</label>
+                <input type="text" id="k8sDirectory" placeholder="容器内日志目录路径，如: /logs">
+            </div>
+            <div class="form-group">
+                <label>文件名匹配</label>
+                <input type="text" id="k8sFilenamePattern" placeholder="留空匹配所有文件，多个用逗号分隔，如: audaque.log">
+            </div>
             <div style="text-align: right;">
                 <button class="btn btn-primary" onclick="addK8sTarget()">确认</button>
             </div>
@@ -286,6 +294,14 @@
                 <label>Context</label>
                 <input type="text" id="editK8sContext" placeholder="留空使用kubeconfig默认context">
             </div>
+            <div class="form-group">
+                <label>日志目录</label>
+                <input type="text" id="editK8sDirectory" placeholder="容器内日志目录路径，如: /logs">
+            </div>
+            <div class="form-group">
+                <label>文件名匹配</label>
+                <input type="text" id="editK8sFilenamePattern" placeholder="留空匹配所有文件，多个用逗号分隔，如: audaque.log">
+            </div>
             <div style="text-align: right;">
                 <button class="btn btn-primary" onclick="updateK8sTarget()">保存</button>
             </div>
@@ -340,7 +356,7 @@
                         ${(sys.k8s_targets||[]).length === 0 ? '<div class="no-result">暂无K8s目标</div>' : (sys.k8s_targets||[]).map((kt, i) => `
                             <div class="server-item">
                                 <div class="server-info">
-                                    <strong>${kt.ip||''}:${kt.port||22}</strong> | 用户: ${kt.username||''} | NS: ${kt.namespace}${kt.kubeconfig ? ' | kubeconfig: ' + kt.kubeconfig : ''}${kt.pod_pattern ? ' | Pod匹配: ' + kt.pod_pattern : ''}${kt.container ? ' | 容器: ' + kt.container : ''}${kt.context ? ' | Context: ' + kt.context : ''}
+                                    <strong>${kt.ip||''}:${kt.port||22}</strong> | 用户: ${kt.username||''} | NS: ${kt.namespace} | 目录: ${kt.directory||''}${kt.filename_pattern ? ' | 文件: ' + kt.filename_pattern : ''}${kt.kubeconfig ? ' | kubeconfig: ' + kt.kubeconfig : ''}${kt.pod_pattern ? ' | Pod匹配: ' + kt.pod_pattern : ''}${kt.container ? ' | 容器: ' + kt.container : ''}${kt.context ? ' | Context: ' + kt.context : ''}
                                 </div>
                                 <div class="server-actions">
                                     <button class="btn-test" onclick="testK8s('${sys.name}', ${i}, this)">测试连接</button>
@@ -610,6 +626,8 @@
             document.getElementById('k8sPodPattern').value = '';
             document.getElementById('k8sContainer').value = '';
             document.getElementById('k8sContext').value = '';
+            document.getElementById('k8sDirectory').value = '';
+            document.getElementById('k8sFilenamePattern').value = '';
             openModal('addK8sModal');
         }
 
@@ -624,10 +642,12 @@
                 namespace: document.getElementById('k8sNamespace').value.trim(),
                 pod_pattern: document.getElementById('k8sPodPattern').value.trim(),
                 container: document.getElementById('k8sContainer').value.trim(),
-                context: document.getElementById('k8sContext').value.trim()
+                context: document.getElementById('k8sContext').value.trim(),
+                directory: document.getElementById('k8sDirectory').value.trim(),
+                filename_pattern: document.getElementById('k8sFilenamePattern').value.trim()
             };
-            if (!target.ip || !target.username || !target.namespace) {
-                alert('IP、用户名和namespace不能为空');
+            if (!target.ip || !target.username || !target.namespace || !target.directory) {
+                alert('IP、用户名、namespace和日志目录不能为空');
                 return;
             }
             const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/k8s`, {
@@ -659,6 +679,8 @@
             document.getElementById('editK8sPodPattern').value = kt.pod_pattern || '';
             document.getElementById('editK8sContainer').value = kt.container || '';
             document.getElementById('editK8sContext').value = kt.context || '';
+            document.getElementById('editK8sDirectory').value = kt.directory || '';
+            document.getElementById('editK8sFilenamePattern').value = kt.filename_pattern || '';
             openModal('editK8sModal');
         }
 
@@ -674,10 +696,12 @@
                 namespace: document.getElementById('editK8sNamespace').value.trim(),
                 pod_pattern: document.getElementById('editK8sPodPattern').value.trim(),
                 container: document.getElementById('editK8sContainer').value.trim(),
-                context: document.getElementById('editK8sContext').value.trim()
+                context: document.getElementById('editK8sContext').value.trim(),
+                directory: document.getElementById('editK8sDirectory').value.trim(),
+                filename_pattern: document.getElementById('editK8sFilenamePattern').value.trim()
             };
-            if (!target.ip || !target.username || !target.namespace) {
-                alert('IP、用户名和namespace不能为空');
+            if (!target.ip || !target.username || !target.namespace || !target.directory) {
+                alert('IP、用户名、namespace和日志目录不能为空');
                 return;
             }
             const res = await fetch(`/api/systems/${encodeURIComponent(systemName)}/k8s/${index}`, {

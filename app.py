@@ -305,11 +305,13 @@ def add_k8s_target(name):
                 'namespace': req.get('namespace', 'default').strip(),
                 'pod_pattern': req.get('pod_pattern', '').strip(),
                 'container': req.get('container', '').strip(),
-                'context': req.get('context', '').strip()
+                'context': req.get('context', '').strip(),
+                'directory': req.get('directory', '').strip(),
+                'filename_pattern': req.get('filename_pattern', '').strip()
             }
-            if not target['ip'] or not target['username'] or not target['namespace']:
-                logger.warning(f'[添加K8s目标] 失败: 系统="{name}", IP/用户名/namespace为空')
-                return jsonify({'error': 'IP、用户名和namespace不能为空'}), 400
+            if not target['ip'] or not target['username'] or not target['namespace'] or not target['directory']:
+                logger.warning(f'[添加K8s目标] 失败: 系统="{name}", IP/用户名/namespace/目录为空')
+                return jsonify({'error': 'IP、用户名、namespace和日志目录不能为空'}), 400
             s['k8s_targets'].append(target)
             save_data(data)
             logger.info(f'[添加K8s目标] 成功: 系统="{name}", 服务器={target["ip"]}:{target["port"]}, namespace={target["namespace"]}, pod匹配={target["pod_pattern"] or "全部"}')
@@ -335,6 +337,8 @@ def update_k8s_target(name, index):
                 target['pod_pattern'] = req.get('pod_pattern', target.get('pod_pattern', '')).strip()
                 target['container'] = req.get('container', target.get('container', '')).strip()
                 target['context'] = req.get('context', target.get('context', '')).strip()
+                target['directory'] = req.get('directory', target.get('directory', '')).strip()
+                target['filename_pattern'] = req.get('filename_pattern', target.get('filename_pattern', '')).strip()
                 save_data(data)
                 logger.info(f'[更新K8s目标] 成功: 系统="{name}", 索引={index}, 服务器={target["ip"]}:{target["port"]}, namespace={target["namespace"]}')
                 return jsonify(target)
@@ -631,6 +635,19 @@ def build_kubectl_cmd(kubeconfig, context, namespace, args):
     return ' '.join(parts)
 
 
+def build_kubectl_exec_cmd(kubeconfig, context, namespace, pod, container, command):
+    parts = ['kubectl']
+    if kubeconfig:
+        parts.append(f'--kubeconfig={kubeconfig}')
+    if context:
+        parts.append(f'--context={context}')
+    parts += ['-n', namespace, 'exec', f'pod/{pod}']
+    if container:
+        parts += ['-c', container]
+    parts += ['--', 'sh', '-c', f'"{command}"']
+    return ' '.join(parts)
+
+
 def search_k8s_target(target, keyword, context_lines):
     ip = target.get('ip', '')
     port = target.get('port', 22)
@@ -641,6 +658,8 @@ def search_k8s_target(target, keyword, context_lines):
     pod_pattern = target.get('pod_pattern', '')
     container = target.get('container', '')
     context = target.get('context', '')
+    directory = target.get('directory', '')
+    filename_pattern = target.get('filename_pattern', '')
 
     result = {
         'server': f'{ip}:{port}({namespace})',
@@ -652,7 +671,7 @@ def search_k8s_target(target, keyword, context_lines):
     ssh = None
     for attempt in range(max_retries):
         try:
-            logger.info(f'[搜索K8s] 开始(尝试{attempt+1}/{max_retries}): {ip}:{port}, namespace={namespace}, pod_pattern={pod_pattern or "全部"}')
+            logger.info(f'[搜索K8s] 开始(尝试{attempt+1}/{max_retries}): {ip}:{port}, namespace={namespace}, 目录={directory}, 文件匹配={filename_pattern or "全部"}')
             ssh = create_ssh_connection(ip, port, username, password)
 
             # List pods
@@ -681,44 +700,46 @@ def search_k8s_target(target, keyword, context_lines):
                 logger.info(f'[搜索K8s] {ip}:{port} namespace={namespace} 过滤后{len(pod_list)}个Pod')
 
             for pod in pod_list:
-                log_args = ['logs', f'pod/{pod}']
-                if container:
-                    log_args += [f'--container={container}']
-                log_cmd = build_kubectl_cmd(kubeconfig, context, namespace, log_args)
-                logger.info(f'[搜索K8s] {ip}:{port} 执行命令: {log_cmd}')
-                stdin, stdout, stderr = ssh.exec_command(log_cmd, timeout=60)
+                # Find log files inside container
+                if filename_pattern:
+                    patterns = [p.strip() for p in filename_pattern.split(',') if p.strip()]
+                    find_parts = []
+                    for p in patterns:
+                        find_parts.append(f"-name '*{p}*'")
+                    find_inner = f"find {directory} -type f \\( {' -o '.join(find_parts)} \\) 2>/dev/null"
+                else:
+                    find_inner = f"find {directory} -type f 2>/dev/null"
+
+                find_cmd = build_kubectl_exec_cmd(kubeconfig, context, namespace, pod, container, find_inner)
+                logger.info(f'[搜索K8s] {ip}:{port} 执行命令: {find_cmd}')
+                stdin, stdout, stderr = ssh.exec_command(find_cmd, timeout=60)
                 exit_code = stdout.channel.recv_exit_status()
-                log_output = stdout.read().decode('utf-8', errors='ignore')
+                file_list = stdout.read().decode('utf-8').strip().split('\n')
+                file_list = [f for f in file_list if f]
+                logger.info(f'[搜索K8s] {ip}:{port} Pod={pod} 找到{len(file_list)}个文件')
 
-                if exit_code != 0:
-                    logger.warning(f'[搜索K8s] 获取Pod日志失败: {pod}, {stderr.read().decode("utf-8").strip()}')
-                    continue
+                for log_file in file_list:
+                    safe_keyword = keyword.replace("\\", "\\\\").replace("'", "'\\''")
+                    grep_inner = f"grep -F -n -i -A {context_lines} -B {context_lines} -- '{safe_keyword}' '{log_file}' 2>/dev/null"
+                    grep_cmd = build_kubectl_exec_cmd(kubeconfig, context, namespace, pod, container, grep_inner)
+                    logger.info(f'[搜索K8s] {ip}:{port} 执行命令: {grep_cmd}')
+                    stdin, stdout, stderr = ssh.exec_command(grep_cmd, timeout=60)
+                    output = stdout.read().decode('utf-8', errors='ignore')
 
-                if not log_output.strip():
-                    continue
-
-                # Grep the log output locally
-                safe_keyword = keyword.replace("\\", "\\\\").replace("'", "'\\''")
-                grep_proc = subprocess.run(
-                    ['grep', '-F', '-n', '-i', '-A', str(context_lines), '-B', str(context_lines), '--', safe_keyword],
-                    input=log_output, capture_output=True, text=True, timeout=60
-                )
-                output = grep_proc.stdout
-
-                if output.strip():
-                    blocks = re.split(r'\n--\n', output.strip())
-                    blocks.reverse()
-                    reversed_output = '\n--\n'.join(blocks)
-                    line_count = reversed_output.count('\n') + 1
-                    logger.info(f'[搜索K8s] {ip}:{port} Pod={pod} 匹配{line_count}行')
-                    display_name = f'{namespace}/{pod}'
-                    result['files'].append({
-                        'path': display_name,
-                        'content': reversed_output
-                    })
+                    if output.strip():
+                        blocks = re.split(r'\n--\n', output.strip())
+                        blocks.reverse()
+                        reversed_output = '\n--\n'.join(blocks)
+                        line_count = reversed_output.count('\n') + 1
+                        logger.info(f'[搜索K8s] {ip}:{port} Pod={pod} 文件={log_file} 匹配{line_count}行')
+                        display_name = f'{namespace}/{pod}:{log_file}'
+                        result['files'].append({
+                            'path': display_name,
+                            'content': reversed_output
+                        })
 
             ssh.close()
-            logger.info(f'[搜索K8s] 完成: {ip}:{port} namespace={namespace}, 匹配Pod数={len(result["files"])}')
+            logger.info(f'[搜索K8s] 完成: {ip}:{port} namespace={namespace}, 匹配文件数={len(result["files"])}')
             return result
         except Exception as e:
             logger.error(f'[搜索K8s] 失败(尝试{attempt+1}/{max_retries}): {ip}:{port}, 错误={str(e)}')
