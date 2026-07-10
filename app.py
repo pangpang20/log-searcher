@@ -526,7 +526,9 @@ def download_logs():
 def create_ssh_connection(ip, port, username, password):
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(ip, port=port, username=username, password=password, timeout=30, banner_timeout=30, auth_timeout=30)
+    ssh.connect(ip, port=port, username=username, password=password,
+                timeout=30, banner_timeout=30, auth_timeout=30,
+                look_for_keys=False, allow_agent=False)
     transport = ssh.get_transport()
     if transport:
         transport.set_keepalive(15)
