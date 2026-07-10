@@ -530,14 +530,20 @@ def create_ssh_connection(ip, port, username, password):
         ssh.connect(ip, port=port, username=username, password=password,
                     timeout=30, banner_timeout=30, auth_timeout=30,
                     look_for_keys=False, allow_agent=False)
+        logger.info(f'[SSH] password认证成功: {ip}:{port}')
     except paramiko.AuthenticationException:
-        # password方式失败，尝试keyboard-interactive方式
+        logger.info(f'[SSH] password认证失败，尝试keyboard-interactive: {ip}:{port}')
         transport = ssh.get_transport()
         if transport is None:
             raise
-        def handler(title, instructions, prompts):
-            return [password] * len(prompts)
-        transport.auth_interactive(username, handler)
+        try:
+            def handler(title, instructions, prompts):
+                return [password] * len(prompts)
+            transport.auth_interactive(username, handler)
+            logger.info(f'[SSH] keyboard-interactive认证成功: {ip}:{port}')
+        except Exception as e:
+            logger.error(f'[SSH] keyboard-interactive认证也失败: {ip}:{port}, 错误={str(e)}')
+            raise
     return ssh
 
 
