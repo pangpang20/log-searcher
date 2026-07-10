@@ -595,9 +595,14 @@ def search_server_logs(server, keyword, context_lines):
                 output = stdout.read().decode('utf-8', errors='ignore')
 
                 if output.strip():
-                    blocks = re.split(r'\n--\n', output.strip())
-                    blocks.reverse()
-                    reversed_output = '\n--\n'.join(blocks)
+                    if context_lines > 0:
+                        blocks = re.split(r'\n--\n', output.strip())
+                        blocks.reverse()
+                        reversed_output = '\n--\n'.join(blocks)
+                    else:
+                        lines = output.strip().split('\n')
+                        lines.reverse()
+                        reversed_output = '\n'.join(lines)
                     line_count = reversed_output.count('\n') + 1
                     logger.info(f'[搜索服务器] {ip}:{port} 文件={log_file} 匹配{line_count}行')
                     result['files'].append({
@@ -727,9 +732,14 @@ def search_k8s_target(target, keyword, context_lines):
                     output = stdout.read().decode('utf-8', errors='ignore')
 
                     if output.strip():
-                        blocks = re.split(r'\n--\n', output.strip())
-                        blocks.reverse()
-                        reversed_output = '\n--\n'.join(blocks)
+                        if context_lines > 0:
+                            blocks = re.split(r'\n--\n', output.strip())
+                            blocks.reverse()
+                            reversed_output = '\n--\n'.join(blocks)
+                        else:
+                            lines = output.strip().split('\n')
+                            lines.reverse()
+                            reversed_output = '\n'.join(lines)
                         line_count = reversed_output.count('\n') + 1
                         logger.info(f'[搜索K8s] {ip}:{port} Pod={pod} 文件={log_file} 匹配{line_count}行')
                         display_name = f'{namespace}/{pod}:{log_file}'
