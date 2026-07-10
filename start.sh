@@ -2,7 +2,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PID_FILE="$SCRIPT_DIR/app.pid"
-LOG_FILE="$SCRIPT_DIR/app.log"
+LOG_FILE="$SCRIPT_DIR/logs/app.log"
 
 check_and_install_deps() {
     echo "检查依赖..."
