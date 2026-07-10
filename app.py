@@ -681,7 +681,7 @@ def search_k8s_target(target, keyword, context_lines):
                 logger.info(f'[搜索K8s] {ip}:{port} namespace={namespace} 过滤后{len(pod_list)}个Pod')
 
             for pod in pod_list:
-                log_args = ['logs', f'pod/{pod}', '--tail=5000']
+                log_args = ['logs', f'pod/{pod}']
                 if container:
                     log_args += [f'--container={container}']
                 log_cmd = build_kubectl_cmd(kubeconfig, context, namespace, log_args)
